@@ -23,6 +23,7 @@ function seekVideo(t: number) {
 }
 
 const GUTTER = 22;
+const NO_KEYFRAMES: number[] = [];
 
 export function Timeline() {
   const scroller = useRef<HTMLDivElement>(null);
@@ -33,7 +34,7 @@ export function Timeline() {
   const playhead = useEditor((s) => s.playhead);
   const selectedId = useEditor((s) => s.selectedId);
   const zoom = useEditor((s) => s.zoom);
-  const keyframes = useEditor((s) => s.media?.keyframeTimes ?? []);
+  const keyframes = useEditor((s) => s.media?.keyframeTimes ?? NO_KEYFRAMES);
   const range = useEditor((s) => s.range);
   const peaks = useEditor((s) => s.peaks);
   const busy = useEditor((s) => s.busy);
