@@ -6,11 +6,9 @@ import { formatTime } from "../core/types";
 import {
   clipAt,
   flattenKind,
-  followSourcePlayback,
   fromMedia,
   isTimelineGap,
   mapTimelineToSource,
-  nextVideoAfter,
   rulerDuration,
   snapStart,
   timelineDuration,
@@ -51,11 +49,6 @@ type EditorState = {
   pickOpen: () => Promise<void>;
   closeProject: () => void;
   setPlayhead: (t: number) => number | null;
-  reportSource: (source: number, playing: boolean) => {
-    seek?: number;
-    gap?: { end: number; source: number; id: string };
-    stop?: boolean;
-  };
   slice: (at?: number, clipId?: string) => void;
   del: () => void;
   undo: () => void;
@@ -192,35 +185,6 @@ export const useEditor = create<EditorState>((set, get) => ({
       showBlack: isTimelineGap(p, playhead),
     });
     return mapped?.source ?? null;
-  },
-
-  reportSource: (source, playing) => {
-    const p = get().project;
-    if (!p) return {};
-    if (!playing) {
-      const hit = p.clips.find((c) => c.kind === "video" && source >= c.sourceStart && source < c.sourceEnd);
-      if (hit) {
-        const tl = hit.timelineStart + (source - hit.sourceStart);
-        if (Math.abs(get().playhead - tl) > 0.008) set({ playhead: tl, selectedId: hit.id, showBlack: false });
-      }
-      return {};
-    }
-    const follow = followSourcePlayback(p, source, get().selectedId);
-    if (Math.abs(get().playhead - follow.timeline) > 0.008) set({ playhead: follow.timeline });
-    if (follow.kind === "continue" && follow.segmentId) set({ selectedId: follow.segmentId, showBlack: false });
-    if (follow.kind === "jump" && follow.seekSource != null) {
-      if (follow.segmentId) set({ selectedId: follow.segmentId, showBlack: false });
-      return { seek: follow.seekSource };
-    }
-    if (follow.kind === "gap" && follow.gapEnd != null && follow.seekSource != null && follow.segmentId) {
-      set({ showBlack: true, playhead: follow.timeline });
-      return { gap: { end: follow.gapEnd, source: follow.seekSource, id: follow.segmentId } };
-    }
-    if (follow.kind === "stop") {
-      set({ playhead: follow.timeline, showBlack: isTimelineGap(p, follow.timeline) });
-      return { stop: true };
-    }
-    return {};
   },
 
   slice: (at, clipId) => {
@@ -389,12 +353,3 @@ export const useEditor = create<EditorState>((set, get) => ({
     }
   },
 }));
-
-export function gapFromPlayhead(): { end: number; source: number; id: string } | null {
-  const p = useEditor.getState().project;
-  const t = useEditor.getState().playhead;
-  if (!p || !isTimelineGap(p, t)) return null;
-  const next = nextVideoAfter(p, t);
-  if (!next) return null;
-  return { end: next.timelineStart, source: next.sourceStart, id: next.id };
-}
