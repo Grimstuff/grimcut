@@ -142,7 +142,7 @@ export const useEditor = create<EditorState>((set, get) => ({
           showBlack: false,
           busy: false,
           peaks,
-          zoom: Math.max(40, Math.min(140, 900 / Math.max(media.duration, 1))),
+          zoom: 1,
           viewStart: 0,
           range: null,
           clipboard: null,
@@ -340,8 +340,9 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   setZoom: (z, anchorTime) => {
+    // zoom is a scale over "fit entire timeline in the track". 1 = full width.
+    const zoom = Math.max(1, Math.min(256, z));
     const p = get().project;
-    const zoom = Math.max(12, Math.min(400, z));
     if (!p) {
       set({ zoom });
       return;

@@ -12,11 +12,15 @@ export function Preview() {
 
   useEffect(() => {
     const v = videoRef.current;
-    if (!v) return;
-    const onTime = () => {
-      if (v.seeking) return;
-      const r = reportSource(v.currentTime, !v.paused);
-      if (r.seek != null) {
+    if (!v || !previewUrl) return;
+
+    let raf = 0;
+    let lastJump = -1;
+
+    const apply = (playing: boolean) => {
+      const r = reportSource(v.currentTime, playing);
+      if (r.seek != null && Math.abs(r.seek - lastJump) > 0.01) {
+        lastJump = r.seek;
         v.currentTime = r.seek;
       }
       if (r.gap) {
@@ -25,9 +29,30 @@ export function Preview() {
       }
       if (r.stop) void v.pause();
     };
-    v.addEventListener("timeupdate", onTime);
-    return () => v.removeEventListener("timeupdate", onTime);
-  }, [reportSource]);
+
+    const loop = () => {
+      if (!v.paused && !v.ended) apply(true);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+
+    const onPlay = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(loop);
+    };
+    const onPause = () => apply(false);
+    const onSeeked = () => apply(!v.paused);
+
+    v.addEventListener("play", onPlay);
+    v.addEventListener("pause", onPause);
+    v.addEventListener("seeked", onSeeked);
+    return () => {
+      cancelAnimationFrame(raf);
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("pause", onPause);
+      v.removeEventListener("seeked", onSeeked);
+    };
+  }, [previewUrl, reportSource]);
 
   function startGap(gap: { end: number; source: number; id: string }) {
     if (gapTimer.current) window.clearInterval(gapTimer.current);

@@ -281,10 +281,12 @@
 .lane-body {
   position: relative;
   height: 100%;
+  flex: 1;
   background: #1a1a1a;
   border: 1px solid var(--gp-border);
   border-radius: 4px;
   min-height: 62px;
+  min-width: 0;
 }
 
 .lane-video .lane-body { background: #1c2228; }
@@ -384,11 +386,12 @@
 .playhead-full {
   position: absolute;
   top: 0;
-  bottom: 0;
+  height: 132px;
   width: 2px;
   background: #dc2626;
   pointer-events: none;
   z-index: 8;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 .playhead-hit {

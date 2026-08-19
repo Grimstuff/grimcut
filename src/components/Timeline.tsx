@@ -22,9 +22,12 @@ function seekVideo(t: number) {
   if (v && src != null) v.currentTime = src;
 }
 
+const GUTTER = 22;
+
 export function Timeline() {
   const scroller = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
+  const trackW = useRef(800);
 
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
@@ -35,18 +38,44 @@ export function Timeline() {
   const busy = useEditor((s) => s.busy);
 
   useEffect(() => {
+    const measure = () => {
+      const el = scroller.current;
+      if (el) trackW.current = Math.max(200, el.clientWidth - GUTTER);
+    };
+    measure();
     const el = scroller.current;
-    const wheel = (e: globalThis.WheelEvent) => {
+    const ro = el ? new ResizeObserver(measure) : null;
+    if (el && ro) ro.observe(el);
+    return () => ro?.disconnect();
+  }, [project]);
+
+  const total = Math.max(project ? rulerDuration(project) : 1, 0.1);
+  const fitPps = trackW.current / total;
+  const pps = fitPps * zoom;
+  const width = Math.max(total * pps, trackW.current);
+
+  const timeAt = (clientX: number) => {
+    const el = scroller.current;
+    if (!el) return 0;
+    const x = clientX - el.getBoundingClientRect().left + el.scrollLeft - GUTTER;
+    return Math.max(0, Math.min(total, x / pps));
+  };
+
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const wheel = (e: WheelEvent) => {
       e.preventDefault();
       const t = timeAt(e.clientX);
-      if (e.ctrlKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
-        const factor = e.deltaY > 0 ? 0.85 : 1.18;
+      const vertical = Math.abs(e.deltaY) >= Math.abs(e.deltaX);
+      if (vertical) {
+        const factor = e.deltaY > 0 ? 0.82 : 1.22;
         useEditor.getState().setZoom(useEditor.getState().zoom * factor, t);
-      } else if (el) {
-        el.scrollLeft += e.deltaX || e.deltaY;
+      } else {
+        el.scrollLeft += e.deltaX;
       }
     };
-    el?.addEventListener("wheel", wheel, { passive: false });
+    el.addEventListener("wheel", wheel, { passive: false });
     const onUp = () => {
       const d = drag.current;
       if (!d) return;
@@ -62,23 +91,21 @@ export function Timeline() {
     };
     window.addEventListener("mouseup", onUp);
     return () => {
-      el?.removeEventListener("wheel", wheel);
+      el.removeEventListener("wheel", wheel);
       window.removeEventListener("mouseup", onUp);
     };
-  }, []);
+  }, [project, pps, total]);
+
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || !project) return;
+    const x = playhead * pps + GUTTER;
+    const pad = 48;
+    if (x < el.scrollLeft + pad) el.scrollLeft = Math.max(0, x - pad);
+    else if (x > el.scrollLeft + el.clientWidth - pad) el.scrollLeft = x - el.clientWidth + pad;
+  }, [playhead, pps, project]);
 
   if (!project) return null;
-
-  const total = rulerDuration(project);
-  const pps = zoom;
-  const width = Math.max(total * pps, 1);
-
-  const timeAt = (clientX: number) => {
-    const el = scroller.current;
-    if (!el) return 0;
-    const x = clientX - el.getBoundingClientRect().left + el.scrollLeft;
-    return Math.max(0, x / pps);
-  };
 
   const onMove = (e: MouseEvent) => {
     const d = drag.current;
@@ -190,7 +217,7 @@ export function Timeline() {
     <div className="timeline">
       <div className="timeline-head">
         <span>
-          {formatTime(playhead)} / {formatTime(timelineDuration(project))} · scroll zoom
+          {formatTime(playhead)} / {formatTime(timelineDuration(project))} · {zoom <= 1.01 ? "fit" : `${zoom.toFixed(1)}×`}
         </span>
         <div className="timeline-actions">
           <button type="button" title="Slice at playhead (S / double-click)" onClick={() => useEditor.getState().slice()}>
@@ -230,18 +257,18 @@ export function Timeline() {
         {renderLane("audio")}
         <div
           className="playhead-hit"
-          style={{ left: playhead * pps + 22 }}
+          style={{ left: playhead * pps + GUTTER }}
           onMouseDown={(e) => {
             e.stopPropagation();
             seekVideo(timeAt(e.clientX));
             drag.current = { kind: "seek" };
           }}
         />
-        <div className="playhead-full" style={{ left: playhead * pps + 22 }} />
+        <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
       </div>
       <div className="timeline-foot">
-        <span>Drag ends to trim · drag clip to move (snaps) · Shift+drag range · double-click / S slice · Ctrl+C/V</span>
-        <span>{zoom.toFixed(0)} px/s</span>
+        <span>Scroll to zoom · drag ends to trim · drag clip to move · empty-drag range · S slice</span>
+        <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>
   );
