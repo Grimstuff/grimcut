@@ -356,7 +356,15 @@ export const useEditor = create<EditorState>((set, get) => ({
       });
       set({ busy: false, status: `Saved: ${result.outputPath} · ${result.message}` });
     } catch (e) {
-      set({ busy: false, status: `Export failed: ${e}` });
+      const text = String(e).replace(/^Error:\s*/i, "");
+      const short = text.split("\n").filter(Boolean).slice(-1)[0] ?? text;
+      set({ busy: false, status: `Export failed: ${short}` });
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        /* ignore */
+      }
+      window.alert(`Export failed (copied to clipboard if allowed):\n\n${text}`);
     }
   },
 }));

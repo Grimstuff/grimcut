@@ -346,7 +346,7 @@ fn make_proxy(app: AppHandle, path: String) -> Result<String, String> {
             }
         }
     }
-    let ( _, err, code) = run_cmd(
+    let (_, err, code) = run_cmd(
         &ffmpeg,
         &[
             "-y",
@@ -368,7 +368,7 @@ fn make_proxy(app: AppHandle, path: String) -> Result<String, String> {
         ],
     )?;
     if code != 0 {
-        return Err(err);
+        return Err(trim_ffmpeg_err(&err));
     }
     Ok(dest.to_string_lossy().into_owned())
 }
@@ -443,7 +443,7 @@ fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
     )?;
     let _ = fs::remove_dir_all(&work);
     if code != 0 {
-        return Err(err);
+        return Err(trim_ffmpeg_err(&err));
     }
     Ok(())
 }
@@ -473,9 +473,31 @@ fn extract_copy(ffmpeg: &Path, src: &str, clip: &ClipDto, dest: &str) -> Result<
         ],
     )?;
     if code != 0 {
-        return Err(err);
+        return Err(trim_ffmpeg_err(&err));
     }
     Ok(())
+}
+
+fn trim_ffmpeg_err(stderr: &str) -> String {
+    let useful: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("ffmpeg version")
+                && !l.starts_with("Copyright")
+                && !l.starts_with("built with")
+                && !l.starts_with("configuration:")
+                && !l.starts_with("  lib")
+                && !l.starts_with("libav")
+        })
+        .collect();
+    let take = useful.iter().rev().take(18).rev().cloned().collect::<Vec<_>>();
+    if take.is_empty() {
+        stderr.chars().take(1200).collect()
+    } else {
+        take.join("\n")
+    }
 }
 
 fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
@@ -520,42 +542,65 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
 
+    let filter_arg = filter_path.to_string_lossy().into_owned();
     let hw = detect_hw_h264(app);
-    let codec = plan.video_codec.as_deref().unwrap_or("h264").to_lowercase();
-    let vargs: Vec<&str> = match (hw, codec.as_str()) {
-        (Some("h264_nvenc"), _) => vec!["-c:v", "h264_nvenc", "-cq", "19", "-preset", "p4", "-pix_fmt", "yuv420p"],
-        (Some("h264_qsv"), _) => vec!["-c:v", "h264_qsv", "-global_quality", "22", "-pix_fmt", "yuv420p"],
-        (Some("h264_amf"), _) => vec!["-c:v", "h264_amf", "-qp_i", "18", "-qp_p", "20", "-pix_fmt", "yuv420p"],
-        (_, "hevc" | "h265") => vec!["-c:v", "libx265", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p"],
-        _ => vec!["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p"],
+    let attempts: Vec<Vec<&str>> = {
+        let mut a = Vec::new();
+        if hw == Some("h264_nvenc") {
+            a.push(vec!["-c:v", "h264_nvenc", "-cq", "19", "-preset", "p4", "-pix_fmt", "yuv420p"]);
+            a.push(vec!["-c:v", "h264_nvenc", "-cq", "19", "-preset", "medium", "-pix_fmt", "yuv420p"]);
+        } else if hw == Some("h264_qsv") {
+            a.push(vec!["-c:v", "h264_qsv", "-global_quality", "22", "-pix_fmt", "yuv420p"]);
+        } else if hw == Some("h264_amf") {
+            a.push(vec!["-c:v", "h264_amf", "-quality", "balanced", "-pix_fmt", "yuv420p"]);
+        }
+        a.push(vec!["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p"]);
+        a
     };
 
-    let mut args: Vec<String> = vec![
-        "-y".into(),
-        "-i".into(),
-        plan.source_path.clone(),
-        "-filter_complex_script".into(),
-        filter_path.to_string_lossy().into_owned(),
-        "-map".into(),
-        "[vout]".into(),
-    ];
-    if plan.has_audio {
-        args.extend(["-map".into(), "[aout]".into(), "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
-    } else {
-        args.push("-an".into());
+    let mut last_err = String::from("encode failed");
+    for (i, vargs) in attempts.iter().enumerate() {
+        let mut args: Vec<String> = vec![
+            "-hide_banner".into(),
+            "-y".into(),
+            "-i".into(),
+            plan.source_path.clone(),
+            // FFmpeg 8: -/filter_complex reads the graph from a file (filter_complex_script is deprecated).
+            "-/filter_complex".into(),
+            filter_arg.clone(),
+            "-map".into(),
+            "[vout]".into(),
+        ];
+        if plan.has_audio {
+            args.extend([
+                "-map".into(),
+                "[aout]".into(),
+                "-c:a".into(),
+                "aac".into(),
+                "-b:a".into(),
+                "192k".into(),
+            ]);
+        } else {
+            args.push("-an".into());
+        }
+        for a in vargs {
+            args.push((*a).into());
+        }
+        args.push(plan.output_path.clone());
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let (_, err, code) = run_cmd(ffmpeg, &arg_refs)?;
+        if code == 0 {
+            let _ = fs::remove_dir_all(&work);
+            return Ok(());
+        }
+        last_err = trim_ffmpeg_err(&err);
+        let _ = app.emit(
+            "export-progress",
+            format!("Encoder attempt {} failed, trying fallback…", i + 1),
+        );
     }
-    for a in vargs {
-        args.push(a.into());
-    }
-    args.push(plan.output_path.clone());
-
-    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (_, err, code) = run_cmd(ffmpeg, &arg_refs)?;
     let _ = fs::remove_dir_all(&work);
-    if code != 0 {
-        return Err(err);
-    }
-    Ok(())
+    Err(last_err)
 }
 
 fn uuid_like() -> String {
