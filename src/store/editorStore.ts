@@ -24,6 +24,7 @@ import {
   tryTrim,
 } from "../core/edits";
 import { canStreamCopyAllClips, snapToKeyframe } from "../core/keyframes";
+import { fitWindowToVideo } from "../lib/fitWindow";
 
 const history = new UndoStack();
 
@@ -159,6 +160,11 @@ export const useEditor = create<EditorState>((set, get) => ({
           status: `${path.split(/[/\\]/).pop()} — ${formatTime(media.duration)}`,
         }),
       );
+      if (media.width && media.height) {
+        requestAnimationFrame(() => {
+          void fitWindowToVideo(media.width!, media.height!);
+        });
+      }
     } catch (e) {
       set({ busy: false, progress: null, status: String(e) });
     }

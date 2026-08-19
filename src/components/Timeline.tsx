@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { clipDuration, formatTime, type Clip, type ClipKind } from "../core/types";
 import { clipsOn, rulerDuration, timelineDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
@@ -28,7 +28,7 @@ const NO_KEYFRAMES: number[] = [];
 export function Timeline() {
   const scroller = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
-  const trackW = useRef(800);
+  const [trackW, setTrackW] = useState(800);
 
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
@@ -42,7 +42,9 @@ export function Timeline() {
   useEffect(() => {
     const measure = () => {
       const el = scroller.current;
-      if (el) trackW.current = Math.max(200, Math.floor(el.clientWidth - GUTTER));
+      if (!el) return;
+      const next = Math.max(200, Math.floor(el.clientWidth - GUTTER));
+      setTrackW((w) => (w === next ? w : next));
     };
     measure();
     const el = scroller.current;
@@ -53,9 +55,9 @@ export function Timeline() {
 
   const total = Math.max(project ? rulerDuration(project) : 1, 0.1);
   const fitted = zoom <= 1.001;
-  const fitPps = trackW.current / total;
+  const fitPps = trackW / total;
   const pps = fitPps * zoom;
-  const width = fitted ? trackW.current : Math.ceil(total * pps);
+  const width = fitted ? trackW : Math.ceil(total * pps);
 
   const timeAt = (clientX: number) => {
     const el = scroller.current;
