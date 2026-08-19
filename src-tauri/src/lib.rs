@@ -536,38 +536,74 @@ fn export_video(app: AppHandle, plan: ExportPlan) -> Result<ExportResultDto, Str
     })
 }
 
+fn mp4_copy_flags(dest: &str) -> Vec<&'static str> {
+    let ext = Path::new(dest)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "mp4" || ext == "m4v" || ext == "mov" {
+        vec!["-movflags", "+faststart"]
+    } else {
+        vec![]
+    }
+}
+
 fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
     if plan.clips.len() == 1 {
-        return extract_copy(ffmpeg, &plan.source_path, &plan.clips[0], &plan.output_path);
+        return extract_copy(
+            ffmpeg,
+            &plan.source_path,
+            &plan.clips[0],
+            &plan.output_path,
+            plan.has_audio,
+            plan.video_codec.as_deref(),
+        );
     }
     let work = std::env::temp_dir().join(format!("grimcut-export-{}", uuid_like()));
     fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let mut list = String::new();
     for (i, clip) in plan.clips.iter().enumerate() {
         let part = work.join(format!("part_{i:03}.mkv"));
-        extract_copy(ffmpeg, &plan.source_path, clip, part.to_str().unwrap())?;
+        extract_copy(
+            ffmpeg,
+            &plan.source_path,
+            clip,
+            part.to_str().unwrap(),
+            plan.has_audio,
+            plan.video_codec.as_deref(),
+        )?;
         let escaped = part.to_string_lossy().replace('\'', r"'\''");
         list.push_str(&format!("file '{escaped}'\n"));
     }
     let list_path = work.join("concat.txt");
     fs::write(&list_path, list).map_err(|e| e.to_string())?;
-    let (_, err, code) = run_cmd(
-        ffmpeg,
-        &[
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            list_path.to_str().unwrap(),
-            "-c",
-            "copy",
-            "-map",
-            "0",
-            &plan.output_path,
-        ],
-    )?;
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-y".into(),
+        "-f".into(),
+        "concat".into(),
+        "-safe".into(),
+        "0".into(),
+        "-i".into(),
+        list_path.to_string_lossy().into_owned(),
+        "-c".into(),
+        "copy".into(),
+        "-map".into(),
+        "0:v:0".into(),
+        "-dn".into(),
+        "-sn".into(),
+    ];
+    if plan.has_audio {
+        args.extend(["-map".into(), "0:a:0".into()]);
+    }
+    hevc_tag(plan.video_codec.as_deref(), &plan.output_path, &mut args);
+    for f in mp4_copy_flags(&plan.output_path) {
+        args.push(f.into());
+    }
+    args.push(plan.output_path.clone());
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let (_, err, code) = run_cmd(ffmpeg, &arg_refs)?;
     let _ = fs::remove_dir_all(&work);
     if code != 0 {
         return Err(trim_ffmpeg_err(&err));
@@ -575,33 +611,64 @@ fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_copy(ffmpeg: &Path, src: &str, clip: &ClipDto, dest: &str) -> Result<(), String> {
+fn hevc_tag(codec: Option<&str>, dest: &str, args: &mut Vec<String>) {
+    let ext = Path::new(dest)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let hevc = matches!(codec.map(|c| c.to_ascii_lowercase()).as_deref(), Some("hevc" | "h265"));
+    if hevc && matches!(ext.as_str(), "mp4" | "m4v" | "mov") {
+        args.extend(["-tag:v".into(), "hvc1".into()]);
+    }
+}
+
+fn extract_copy(
+    ffmpeg: &Path,
+    src: &str,
+    clip: &ClipDto,
+    dest: &str,
+    has_audio: bool,
+    video_codec: Option<&str>,
+) -> Result<(), String> {
     if clip.gap {
         return Err("Stream copy cannot include timeline gaps.".into());
     }
     let start = clip.source_start.max(0.0);
     let end = clip.source_end.max(start + 0.02);
+    let dur = (end - start).max(0.02);
     let start_s = format!("{start:.6}");
-    let end_s = format!("{end:.6}");
-    let (_, err, code) = run_cmd(
-        ffmpeg,
-        &[
-            "-y",
-            "-i",
-            src,
-            "-ss",
-            &start_s,
-            "-to",
-            &end_s,
-            "-c",
-            "copy",
-            "-map",
-            "0",
-            "-avoid_negative_ts",
-            "make_zero",
-            dest,
-        ],
-    )?;
+    let dur_s = format!("{dur:.6}");
+    // Input -ss so copy begins at a keyframe. -ss after -i with -c copy often
+    // drops the GOP and leaves a black still + audio.
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-y".into(),
+        "-ss".into(),
+        start_s,
+        "-i".into(),
+        src.into(),
+        "-t".into(),
+        dur_s,
+        "-c".into(),
+        "copy".into(),
+        "-map".into(),
+        "0:v:0".into(),
+        "-dn".into(),
+        "-sn".into(),
+        "-avoid_negative_ts".into(),
+        "make_zero".into(),
+    ];
+    if has_audio {
+        args.extend(["-map".into(), "0:a:0".into()]);
+    }
+    hevc_tag(video_codec, dest, &mut args);
+    for f in mp4_copy_flags(dest) {
+        args.push(f.into());
+    }
+    args.push(dest.into());
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let (_, err, code) = run_cmd(ffmpeg, &arg_refs)?;
     if code != 0 {
         return Err(trim_ffmpeg_err(&err));
     }
