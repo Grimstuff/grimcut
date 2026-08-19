@@ -6,7 +6,7 @@ import { Preview } from "./components/Preview";
 import { Timeline } from "./components/Timeline";
 import { BusyOverlay } from "./components/BusyOverlay";
 import { useEditor } from "./store/editorStore";
-import { attachAspectLock } from "./lib/fitWindow";
+import { pushAspectLock } from "./lib/fitWindow";
 
 export default function App() {
   const status = useEditor((s) => s.status);
@@ -49,12 +49,20 @@ export default function App() {
   }, [openPath, setProgress]);
 
   useEffect(() => {
-    if (!mediaW || !mediaH) return;
-    let stop: (() => void) | undefined;
-    void attachAspectLock(mediaW / mediaH).then((fn) => {
-      stop = fn;
+    const aspect = mediaW && mediaH ? mediaW / mediaH : null;
+    void pushAspectLock(aspect);
+    if (!aspect) return;
+    const ro = new ResizeObserver(() => {
+      void pushAspectLock(aspect);
     });
-    return () => stop?.();
+    const tl = document.querySelector(".timeline");
+    const ch = document.querySelector(".chrome");
+    if (tl) ro.observe(tl);
+    if (ch) ro.observe(ch);
+    return () => {
+      ro.disconnect();
+      void pushAspectLock(null);
+    };
   }, [mediaW, mediaH]);
 
   return (

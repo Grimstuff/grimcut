@@ -1,3 +1,5 @@
+mod windows_sizing;
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -446,6 +448,11 @@ fn waveform(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
 }
 
 #[tauri::command]
+fn set_aspect_lock(aspect: f64, extra: f64, enabled: bool) {
+    windows_sizing::set_lock(aspect, extra, enabled);
+}
+
+#[tauri::command]
 fn suggest_save(path: String) -> String {
     let p = PathBuf::from(&path);
     let dir = p.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
@@ -850,12 +857,19 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            if let Some(win) = app.get_webview_window("main") {
+                windows_sizing::install_hook(&win);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             probe,
             waveform,
             suggest_save,
             make_proxy,
-            export_video
+            export_video,
+            set_aspect_lock
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
