@@ -94,6 +94,10 @@ export function Preview() {
 
   const togglePlay = () => {
     const st = useEditor.getState();
+    if (st.menuOpen) {
+      st.setMenuOpen(false);
+      return;
+    }
     if (!st.project) return;
     if (st.playing) {
       st.setPlaying(false);
@@ -121,6 +125,7 @@ export function Preview() {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
       const st = useEditor.getState();
+      if (st.menuOpen) return;
       if (e.code === "Space" || e.key === " ") {
         e.preventDefault();
         e.stopPropagation();

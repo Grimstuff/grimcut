@@ -46,6 +46,7 @@ type EditorState = {
   range: (TimeRange & { kind: ClipKind }) | null;
   clipboard: ClipboardChunk | null;
   playing: boolean;
+  menuOpen: boolean;
   openPath: (path: string) => Promise<void>;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
@@ -66,6 +67,7 @@ type EditorState = {
   setZoom: (z: number, anchorTime?: number) => void;
   setViewStart: (t: number) => void;
   setPlaying: (v: boolean) => void;
+  setMenuOpen: (v: boolean) => void;
   exportVideo: () => Promise<void>;
 };
 
@@ -105,8 +107,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   range: null,
   clipboard: null,
   playing: false,
+  menuOpen: false,
 
   setPlaying: (v) => set({ playing: v }),
+  setMenuOpen: (v) => set({ menuOpen: v }),
 
   openPath: async (path) => {
     set({ busy: true, status: "Probing…" });

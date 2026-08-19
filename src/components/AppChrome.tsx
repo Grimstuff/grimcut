@@ -17,10 +17,12 @@ async function winAction(kind: "minimize" | "toggleMaximize" | "close") {
 }
 
 export function AppChrome() {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const menuOpen = useEditor((s) => s.menuOpen);
+  const setMenuOpen = useEditor((s) => s.setMenuOpen);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const [maximized, setMaximized] = useState(false);
   const hamburgerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const has = useEditor((s) => s.project != null);
   const busy = useEditor((s) => s.busy);
   const pickOpen = useEditor((s) => s.pickOpen);
@@ -57,12 +59,46 @@ export function AppChrome() {
     setMenuPos({ top: rect.bottom + 2, left: rect.left });
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointer = (e: PointerEvent) => {
+      const n = e.target as Node | null;
+      if (!n) return;
+      if (hamburgerRef.current?.contains(n)) return;
+      if (menuRef.current?.contains(n)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMenuOpen(false);
+        return;
+      }
+      // Don't play/slice/save while the menu is open — dismiss only.
+      if (e.code === "Space" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [menuOpen, setMenuOpen]);
+
   const menu = menuOpen
     ? createPortal(
         <div
+          ref={menuRef}
           className="menu-dropdown"
           style={{ top: menuPos.top, left: menuPos.left }}
-          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
         >
           <div className="menu-label">File</div>
           <button type="button" className="menu-option" onClick={() => { setMenuOpen(false); void pickOpen(); }}>
@@ -111,7 +147,7 @@ export function AppChrome() {
         className="chrome-hamburger"
         aria-expanded={menuOpen}
         title="Menu"
-        onClick={() => setMenuOpen((v) => !v)}
+        onClick={() => setMenuOpen(!menuOpen)}
       >
         <span className="chrome-hamburger-icon" aria-hidden>
           <span />
