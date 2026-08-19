@@ -239,21 +239,123 @@ fn load_keyframes(ffprobe: &Path, path: &str) -> Vec<f64> {
     times
 }
 
-fn detect_hw_h264(app: &AppHandle) -> Option<&'static str> {
-    let ffmpeg = ffmpeg_bin(app, "ffmpeg");
-    let Ok((out, err, _)) = run_cmd(&ffmpeg, &["-hide_banner", "-encoders"]) else {
-        return None;
-    };
-    let text = format!("{out}\n{err}");
-    if text.contains("h264_nvenc") {
-        Some("h264_nvenc")
-    } else if text.contains("h264_qsv") {
-        Some("h264_qsv")
-    } else if text.contains("h264_amf") {
-        Some("h264_amf")
-    } else {
-        None
+struct EncoderOpt {
+    id: &'static str,
+    label: &'static str,
+    args: Vec<&'static str>,
+}
+
+fn gpu_adapter_names() -> String {
+    let ps = r#"Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }"#;
+    if let Ok(out) = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+        .output()
+    {
+        return String::from_utf8_lossy(&out.stdout).to_lowercase();
     }
+    String::new()
+}
+
+fn encoder_priority() -> Vec<&'static str> {
+    let gpus = gpu_adapter_names();
+    let amd = gpus.contains("amd") || gpus.contains("radeon") || gpus.contains("advanced micro");
+    let nvidia = gpus.contains("nvidia") || gpus.contains("geforce") || gpus.contains("quadro");
+    let intel = gpus.contains("intel") || gpus.contains("uhd") || gpus.contains("iris");
+    let mut order = Vec::new();
+    if nvidia {
+        order.push("h264_nvenc");
+    }
+    if amd {
+        order.push("h264_amf");
+    }
+    if intel {
+        order.push("h264_qsv");
+    }
+    for id in ["h264_nvenc", "h264_amf", "h264_qsv"] {
+        if !order.contains(&id) {
+            order.push(id);
+        }
+    }
+    order.push("libx264");
+    order
+}
+
+fn encoder_catalog() -> [EncoderOpt; 5] {
+    [
+        EncoderOpt {
+            id: "h264_nvenc",
+            label: "NVIDIA NVENC",
+            args: vec!["-c:v", "h264_nvenc", "-cq", "19", "-preset", "p4", "-pix_fmt", "yuv420p"],
+        },
+        EncoderOpt {
+            id: "h264_amf",
+            label: "AMD AMF",
+            args: vec!["-c:v", "h264_amf", "-quality", "balanced", "-pix_fmt", "yuv420p"],
+        },
+        EncoderOpt {
+            id: "h264_qsv",
+            label: "Intel Quick Sync",
+            args: vec!["-c:v", "h264_qsv", "-global_quality", "22", "-pix_fmt", "yuv420p"],
+        },
+        EncoderOpt {
+            id: "h264_nvenc",
+            label: "NVIDIA NVENC",
+            args: vec!["-c:v", "h264_nvenc", "-cq", "19", "-preset", "medium", "-pix_fmt", "yuv420p"],
+        },
+        EncoderOpt {
+            id: "libx264",
+            label: "CPU (libx264)",
+            args: vec!["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p"],
+        },
+    ]
+}
+
+fn encoder_smoke_test(ffmpeg: &Path, args: &[&str]) -> bool {
+    let mut cmd = vec![
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=128x72:d=0.15:r=24",
+    ];
+    cmd.extend_from_slice(args);
+    cmd.extend_from_slice(&["-frames:v", "4", "-f", "null", "-"]);
+    matches!(run_cmd(ffmpeg, &cmd), Ok((_, _, 0)))
+}
+
+/// Encoders that actually work on this machine, GPU-first (not merely compiled into FFmpeg).
+fn working_encoders(ffmpeg: &Path) -> Vec<EncoderOpt> {
+    let catalog = encoder_catalog();
+    let mut picked: Vec<EncoderOpt> = Vec::new();
+    for id in encoder_priority() {
+        for opt in catalog.iter() {
+            if opt.id != id {
+                continue;
+            }
+            if picked.iter().any(|p| p.args == opt.args) {
+                continue;
+            }
+            if encoder_smoke_test(ffmpeg, &opt.args) {
+                picked.push(EncoderOpt {
+                    id: opt.id,
+                    label: opt.label,
+                    args: opt.args.clone(),
+                });
+            }
+        }
+    }
+    if !picked.iter().any(|p| p.id == "libx264") {
+        if let Some(cpu) = catalog.iter().find(|o| o.id == "libx264") {
+            picked.push(EncoderOpt {
+                id: cpu.id,
+                label: cpu.label,
+                args: cpu.args.clone(),
+            });
+        }
+    }
+    picked
 }
 
 #[tauri::command]
@@ -394,18 +496,13 @@ fn export_video(app: AppHandle, plan: ExportPlan) -> Result<ExportResultDto, Str
     }
 
     let _ = app.emit("export-progress", "Re-encoding for clean cuts…");
-    export_reencode(&app, &ffmpeg, &plan)?;
-    let hw = detect_hw_h264(&app);
-    let extra = match hw {
-        Some(n) => format!(" Used {n}."),
-        None => " Used CPU encode.".to_string(),
-    };
+    let used = export_reencode(&app, &ffmpeg, &plan)?;
     Ok(ExportResultDto {
         success: true,
         output_path: plan.output_path.clone(),
         mode: "reencode".into(),
         clip_count: plan.clips.len(),
-        message: format!("Saved with high-quality re-encode for clean cuts.{extra}"),
+        message: format!("Saved with high-quality re-encode for clean cuts. Used {used}."),
     })
 }
 
@@ -500,7 +597,7 @@ fn trim_ffmpeg_err(stderr: &str) -> String {
     }
 }
 
-fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
+fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
     let mut fc = String::new();
     let mut vpads = String::new();
     for (i, clip) in plan.clips.iter().enumerate() {
@@ -543,23 +640,18 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
 
     let filter_arg = filter_path.to_string_lossy().into_owned();
-    let hw = detect_hw_h264(app);
-    let attempts: Vec<Vec<&str>> = {
-        let mut a = Vec::new();
-        if hw == Some("h264_nvenc") {
-            a.push(vec!["-c:v", "h264_nvenc", "-cq", "19", "-preset", "p4", "-pix_fmt", "yuv420p"]);
-            a.push(vec!["-c:v", "h264_nvenc", "-cq", "19", "-preset", "medium", "-pix_fmt", "yuv420p"]);
-        } else if hw == Some("h264_qsv") {
-            a.push(vec!["-c:v", "h264_qsv", "-global_quality", "22", "-pix_fmt", "yuv420p"]);
-        } else if hw == Some("h264_amf") {
-            a.push(vec!["-c:v", "h264_amf", "-quality", "balanced", "-pix_fmt", "yuv420p"]);
-        }
-        a.push(vec!["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p"]);
-        a
-    };
+    let attempts = working_encoders(ffmpeg);
+    if attempts.is_empty() {
+        let _ = fs::remove_dir_all(&work);
+        return Err("No H.264 encoder available.".into());
+    }
+    let _ = app.emit(
+        "export-progress",
+        format!("Trying {}…", attempts[0].label),
+    );
 
     let mut last_err = String::from("encode failed");
-    for (i, vargs) in attempts.iter().enumerate() {
+    for (i, enc) in attempts.iter().enumerate() {
         let mut args: Vec<String> = vec![
             "-hide_banner".into(),
             "-y".into(),
@@ -583,7 +675,7 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
         } else {
             args.push("-an".into());
         }
-        for a in vargs {
+        for a in &enc.args {
             args.push((*a).into());
         }
         args.push(plan.output_path.clone());
@@ -591,12 +683,13 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
         let (_, err, code) = run_cmd(ffmpeg, &arg_refs)?;
         if code == 0 {
             let _ = fs::remove_dir_all(&work);
-            return Ok(());
+            return Ok(enc.label.to_string());
         }
         last_err = trim_ffmpeg_err(&err);
+        let next = attempts.get(i + 1).map(|e| e.label).unwrap_or("CPU");
         let _ = app.emit(
             "export-progress",
-            format!("Encoder attempt {} failed, trying fallback…", i + 1),
+            format!("{} failed, trying {next}…", enc.label),
         );
     }
     let _ = fs::remove_dir_all(&work);
