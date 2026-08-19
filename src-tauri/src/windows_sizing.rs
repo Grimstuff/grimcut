@@ -33,17 +33,19 @@ pub fn set_lock(aspect: f64, extra_logical: f64, enabled: bool) {
 #[cfg(windows)]
 mod win {
     use super::LOCK;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
     use std::sync::atomic::AtomicIsize;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC, HTLEFT, HTRIGHT, WM_NCHITTEST,
-        WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOPLEFT,
+        CallWindowProcW, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC, HTLEFT, HTRIGHT,
+        WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCHITTEST, WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_LEFT,
+        WMSZ_RIGHT, WMSZ_TOPLEFT,
     };
 
     static INSTALLED: AtomicBool = AtomicBool::new(false);
     static ORIG_PROC: AtomicIsize = AtomicIsize::new(0);
+    static LAST_LOCKED_W: AtomicI32 = AtomicI32::new(0);
 
     pub fn install(window: &tauri::WebviewWindow) {
         if INSTALLED.swap(true, Ordering::SeqCst) {
@@ -65,6 +67,9 @@ mod win {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        if msg == WM_ENTERSIZEMOVE || msg == WM_EXITSIZEMOVE {
+            LAST_LOCKED_W.store(0, Ordering::SeqCst);
+        }
         if msg == WM_SIZING {
             constrain(hwnd, wparam.0 as u32, lparam);
         }
@@ -101,8 +106,17 @@ mod win {
 
         let rect = unsafe { &mut *(lparam.0 as *mut RECT) };
         let h = rect.bottom - rect.top;
-        let preview_h = (h - extra).max(80);
-        let locked_w = ((aspect * preview_h as f64).round() as i32).max(min_w);
+        // Even preview height so 1px mouse jitter doesn't flip the derived width.
+        let preview_h = ((h - extra).max(80) / 2) * 2;
+        let mut locked_w = ((aspect * preview_h as f64).round() as i32).max(min_w);
+        locked_w = (locked_w / 2) * 2;
+        let last = LAST_LOCKED_W.load(Ordering::SeqCst);
+        if last != 0 && (locked_w - last).abs() <= 2 {
+            locked_w = last;
+        } else {
+            LAST_LOCKED_W.store(locked_w, Ordering::SeqCst);
+        }
+
         let left_edge = matches!(edge, WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT);
         let side_only = matches!(edge, WMSZ_LEFT | WMSZ_RIGHT);
 
