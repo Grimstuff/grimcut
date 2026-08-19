@@ -1,11 +1,7 @@
 import { useEffect, useRef } from "react";
-import { clipAt, mapTimelineToSource, timelineDuration } from "../core/project";
+import { mapTimelineToSource, timelineDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
 
-/**
- * Timeline clock owns the pin. The <video> is only the head reading the file
- * under that pin — we never map decoder time back onto clips (that caused gap loops).
- */
 export function Preview() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewUrl = useEditor((s) => s.previewUrl);
@@ -13,111 +9,122 @@ export function Preview() {
   const pickOpen = useEditor((s) => s.pickOpen);
   const setPlayhead = useEditor((s) => s.setPlayhead);
 
-  const playing = useRef(false);
   const lastWall = useRef(0);
   const lastClipId = useRef<string | null>(null);
   const fileSeeking = useRef(false);
-  const raf = useRef(0);
 
-  const stopTransport = () => {
-    playing.current = false;
-    lastWall.current = 0;
-    const v = videoRef.current;
-    if (v && !v.paused) void v.pause();
-  };
+  useEffect(() => {
+    let id = 0;
+    const tick = (now: number) => {
+      id = requestAnimationFrame(tick);
+      const st = useEditor.getState();
+      if (!st.playing) {
+        lastWall.current = 0;
+        return;
+      }
+      const p = st.project;
+      const v = videoRef.current;
+      if (!p) {
+        st.setPlaying(false);
+        return;
+      }
 
-  const cueFile = (source: number, play: boolean) => {
+      const dt = lastWall.current ? Math.min(0.08, (now - lastWall.current) / 1000) : 0;
+      lastWall.current = now;
+      const end = Math.max(timelineDuration(p), 0.01);
+      const ph = Math.min(end, st.playhead + dt);
+
+      if (ph >= end - 0.0005) {
+        useEditor.setState({ playhead: end, showBlack: true, playing: false });
+        lastWall.current = 0;
+        if (v && !v.paused) void v.pause();
+        return;
+      }
+
+      const mapped = mapTimelineToSource(p, ph);
+      if (!mapped) {
+        lastClipId.current = null;
+        useEditor.setState({ playhead: ph, showBlack: true });
+        if (v && !v.paused) void v.pause();
+        return;
+      }
+
+      useEditor.setState({ playhead: ph, showBlack: false, selectedId: mapped.clip.id });
+      if (!v) return;
+
+      const changed = lastClipId.current !== mapped.clip.id;
+      lastClipId.current = mapped.clip.id;
+      if (changed) {
+        fileSeeking.current = true;
+        try {
+          v.currentTime = Math.max(0, mapped.source);
+        } catch {
+          /* ignore */
+        }
+        void v.play().catch(() => {});
+        return;
+      }
+      if (!fileSeeking.current && Math.abs(v.currentTime - mapped.source) > 0.4) {
+        fileSeeking.current = true;
+        try {
+          v.currentTime = Math.max(0, mapped.source);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (v.paused && !fileSeeking.current) void v.play().catch(() => {});
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+  }, [previewUrl]);
+
+  useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    fileSeeking.current = true;
-    v.currentTime = Math.max(0, source);
-    if (play) void v.play();
-    else void v.pause();
-  };
+    const clear = () => {
+      fileSeeking.current = false;
+    };
+    v.addEventListener("seeked", clear);
+    v.addEventListener("playing", clear);
+    return () => {
+      v.removeEventListener("seeked", clear);
+      v.removeEventListener("playing", clear);
+    };
+  }, [previewUrl]);
 
-  const tick = (now: number) => {
-    raf.current = requestAnimationFrame(tick);
-    if (!playing.current) {
-      lastWall.current = 0;
-      return;
-    }
-    const dt = lastWall.current ? Math.min(0.08, (now - lastWall.current) / 1000) : 0;
-    lastWall.current = now;
-
+  const togglePlay = () => {
     const st = useEditor.getState();
-    const p = st.project;
-    if (!p) {
-      stopTransport();
-      return;
-    }
-    const end = timelineDuration(p);
-    const ph = Math.min(end, st.playhead + dt);
-    const mapped = mapTimelineToSource(p, ph);
-    const clip = mapped?.clip ?? clipAt(p, ph, "video");
-
-    if (ph >= end - 0.001) {
-      useEditor.setState({ playhead: end, showBlack: true });
-      stopTransport();
-      return;
-    }
-
-    if (!mapped || !clip) {
-      lastClipId.current = null;
-      useEditor.setState({ playhead: ph, showBlack: true });
+    if (!st.project) return;
+    if (st.playing) {
+      st.setPlaying(false);
       const v = videoRef.current;
       if (v && !v.paused) void v.pause();
       return;
     }
-
-    useEditor.setState({ playhead: ph, showBlack: false, selectedId: clip.id });
-    const src = mapped.source;
+    lastWall.current = 0;
+    lastClipId.current = null;
+    st.setPlaying(true);
+    const mapped = mapTimelineToSource(st.project, st.playhead);
     const v = videoRef.current;
-    if (!v) return;
-
-    const clipChanged = lastClipId.current !== clip.id;
-    lastClipId.current = clip.id;
-    if (clipChanged) {
-      cueFile(src, true);
-      return;
+    if (v && mapped) {
+      try {
+        v.currentTime = mapped.source;
+      } catch {
+        /* ignore */
+      }
+      void v.play().catch(() => {});
     }
-    if (!fileSeeking.current && Math.abs(v.currentTime - src) > 0.35) {
-      cueFile(src, true);
-    }
-    if (v.paused && !fileSeeking.current) void v.play();
   };
-
-  useEffect(() => {
-    raf.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf.current);
-  }, [previewUrl]);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    const onSeeked = () => {
-      fileSeeking.current = false;
-    };
-    v.addEventListener("seeked", onSeeked);
-    return () => v.removeEventListener("seeked", onSeeked);
-  }, [previewUrl]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
       const st = useEditor.getState();
-      if (e.code === "Space") {
+      if (e.code === "Space" || e.key === " ") {
         e.preventDefault();
-        if (!st.project) return;
-        if (playing.current) {
-          stopTransport();
-          return;
-        }
-        playing.current = true;
-        lastWall.current = 0;
-        lastClipId.current = null;
-        const mapped = mapTimelineToSource(st.project, st.playhead);
-        if (mapped) cueFile(mapped.source, true);
+        e.stopPropagation();
+        togglePlay();
         return;
       }
       if (e.ctrlKey && e.code === "KeyO") {
@@ -157,8 +164,8 @@ export function Preview() {
         st.del();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   if (!previewUrl) {
@@ -177,7 +184,7 @@ export function Preview() {
   }
 
   return (
-    <div className="preview-wrap">
+    <div className="preview-wrap" onClick={togglePlay} title="Click or Space to play/pause">
       <video
         ref={videoRef}
         src={previewUrl}

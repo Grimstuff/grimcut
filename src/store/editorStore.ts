@@ -45,6 +45,7 @@ type EditorState = {
   viewStart: number;
   range: (TimeRange & { kind: ClipKind }) | null;
   clipboard: ClipboardChunk | null;
+  playing: boolean;
   openPath: (path: string) => Promise<void>;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
@@ -64,6 +65,7 @@ type EditorState = {
   paste: (kind?: ClipKind) => void;
   setZoom: (z: number, anchorTime?: number) => void;
   setViewStart: (t: number) => void;
+  setPlaying: (v: boolean) => void;
   exportVideo: () => Promise<void>;
 };
 
@@ -102,6 +104,9 @@ export const useEditor = create<EditorState>((set, get) => ({
   viewStart: 0,
   range: null,
   clipboard: null,
+  playing: false,
+
+  setPlaying: (v) => set({ playing: v }),
 
   openPath: async (path) => {
     set({ busy: true, status: "Probing…" });
@@ -139,6 +144,7 @@ export const useEditor = create<EditorState>((set, get) => ({
           viewStart: 0,
           range: null,
           clipboard: null,
+          playing: false,
           status: `${path.split(/[/\\]/).pop()} — ${formatTime(media.duration)}`,
         }),
       );
@@ -167,6 +173,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         showBlack: false,
         peaks: [],
         range: null,
+        playing: false,
         status: "Drop a video or File → Open…",
       }),
     );
