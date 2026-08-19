@@ -23,7 +23,7 @@ import {
   tryToggleLink,
   tryTrim,
 } from "../core/edits";
-import { canStreamCopyAllClips } from "../core/keyframes";
+import { canStreamCopyAllClips, snapToKeyframe } from "../core/keyframes";
 
 const history = new UndoStack();
 
@@ -56,8 +56,8 @@ type EditorState = {
   undo: () => void;
   redo: () => void;
   select: (id: string | null) => void;
-  liveTrim: (id: string, edge: "left" | "right", sourceEdge: number) => void;
-  liveMove: (id: string, timelineStart: number) => void;
+  liveTrim: (id: string, edge: "left" | "right", sourceEdge: number, snapSec?: number) => void;
+  liveMove: (id: string, timelineStart: number, snapSec?: number) => void;
   commit: (before: Clip[], label: string) => void;
   snapshot: () => Clip[] | null;
   toggleLink: (id: string) => void;
@@ -201,7 +201,15 @@ export const useEditor = create<EditorState>((set, get) => ({
   slice: (at, clipId) => {
     const p = get().project;
     if (!p) return;
-    const r = trySlice(p, at ?? get().playhead, clipId);
+    let t = at ?? get().playhead;
+    const kfs = get().media?.keyframeTimes ?? [];
+    const under = p.clips.find((c) => t > c.timelineStart && t < c.timelineStart + (c.sourceEnd - c.sourceStart) && c.kind === "video");
+    if (under && kfs.length) {
+      const src = under.sourceStart + (t - under.timelineStart);
+      const snapped = snapToKeyframe(src, kfs, 0.15);
+      t = under.timelineStart + (snapped - under.sourceStart);
+    }
+    const r = trySlice(p, t, clipId);
     if (!r.ok) {
       set({ status: r.error });
       return;
@@ -237,20 +245,42 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   select: (id) => set({ selectedId: id }),
 
-  liveTrim: (id, edge, sourceEdge) => {
+  liveTrim: (id, edge, sourceEdge, snapSec = 0.12) => {
     const p = get().project;
     if (!p) return;
-    const r = tryTrim(p, id, edge, sourceEdge);
+    const kfs = get().media?.keyframeTimes ?? [];
+    const snapped = snapToKeyframe(sourceEdge, kfs, snapSec);
+    const r = tryTrim(p, id, edge, snapped);
     if (r.ok) set({ project: { ...p, clips: r.clips } });
   },
 
-  liveMove: (id, timelineStart) => {
+  liveMove: (id, timelineStart, snapSec = 0.12) => {
     const p = get().project;
     if (!p) return;
     const clip = p.clips.find((c) => c.id === id);
     if (!clip) return;
-    const snapped = snapStart(p, { ...clip, timelineStart }, timelineStart);
-    const r = tryMove(p, id, snapped);
+    const kfs = get().media?.keyframeTimes ?? [];
+    let best = snapStart(p, clip, timelineStart, snapSec);
+    let bestD = Math.abs(best - timelineStart);
+    const consider = (cand: number) => {
+      if (cand < 0) return;
+      const d = Math.abs(cand - timelineStart);
+      if (d <= snapSec && d < bestD) {
+        bestD = d;
+        best = cand;
+      }
+    };
+    for (const kf of kfs) {
+      if (kf < clip.sourceStart - 0.05 || kf > clip.sourceEnd + 0.05) continue;
+      const offset = kf - clip.sourceStart;
+      for (const other of p.clips) {
+        if (other.id === clip.id) continue;
+        consider(other.timelineStart - offset);
+        consider(other.timelineStart + (other.sourceEnd - other.sourceStart) - offset);
+      }
+      consider(-offset);
+    }
+    const r = tryMove(p, id, best);
     if (r.ok) set({ project: { ...p, clips: r.clips } });
   },
 

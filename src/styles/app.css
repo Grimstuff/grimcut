@@ -371,6 +371,17 @@
 .handle.left { left: 0; }
 .handle.right { right: 0; }
 
+.kf-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(245, 158, 11, 0.85);
+  pointer-events: none;
+  z-index: 1;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.25);
+}
+
 .handle:hover { background: #fff; }
 
 .range-box {

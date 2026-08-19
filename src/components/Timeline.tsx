@@ -33,6 +33,7 @@ export function Timeline() {
   const playhead = useEditor((s) => s.playhead);
   const selectedId = useEditor((s) => s.selectedId);
   const zoom = useEditor((s) => s.zoom);
+  const keyframes = useEditor((s) => s.media?.keyframeTimes ?? []);
   const range = useEditor((s) => s.range);
   const peaks = useEditor((s) => s.peaks);
   const busy = useEditor((s) => s.busy);
@@ -125,10 +126,11 @@ export function Timeline() {
       return;
     }
     const delta = (e.clientX - d.startX) / pps;
+    const snapSec = Math.min(0.25, Math.max(0.05, 10 / pps));
     const st = useEditor.getState();
-    if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta);
-    if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta);
-    if (d.kind === "move") st.liveMove(d.id, d.orig + delta);
+    if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta, snapSec);
+    if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta, snapSec);
+    if (d.kind === "move") st.liveMove(d.id, d.orig + delta, snapSec);
   };
 
   const startBox = (kind: ClipKind, e: MouseEvent) => {
@@ -178,6 +180,7 @@ export function Timeline() {
               selected={c.id === selectedId}
               peaks={kind === "audio" ? peaks : []}
               sourceDuration={project.sourceDuration}
+              keyframes={keyframes}
               onMove={(e) => startEdit("move", c, e, c.timelineStart)}
               onTrimL={(e) => startEdit("trimL", c, e, c.sourceStart)}
               onTrimR={(e) => startEdit("trimR", c, e, c.sourceEnd)}
@@ -192,6 +195,7 @@ export function Timeline() {
               overlay
               peaks={kind === "audio" ? peaks : []}
               sourceDuration={project.sourceDuration}
+              keyframes={keyframes}
               onMove={(e) => startEdit("move", c, e, c.timelineStart)}
               onTrimL={(e) => startEdit("trimL", c, e, c.sourceStart)}
               onTrimR={(e) => startEdit("trimR", c, e, c.sourceEnd)}
@@ -267,7 +271,7 @@ export function Timeline() {
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
       </div>
       <div className="timeline-foot">
-        <span>Scroll to zoom · drag ends to trim · drag clip to move · empty-drag range · S slice</span>
+        <span>Amber ticks = keyframes (weak snap) · trim/slice to them for lossless save</span>
         <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>
@@ -281,6 +285,7 @@ function ClipView({
   overlay,
   peaks,
   sourceDuration,
+  keyframes,
   onMove,
   onTrimL,
   onTrimR,
@@ -291,23 +296,38 @@ function ClipView({
   overlay?: boolean;
   peaks: number[];
   sourceDuration: number;
+  keyframes: number[];
   onMove: (e: MouseEvent) => void;
   onTrimL: (e: MouseEvent) => void;
   onTrimR: (e: MouseEvent) => void;
 }) {
+  const dur = clipDuration(clip);
+  const ticks: number[] = [];
+  let lastX = -99;
+  for (const kf of keyframes) {
+    if (kf < clip.sourceStart - 0.001 || kf > clip.sourceEnd + 0.001) continue;
+    const x = ((kf - clip.sourceStart) / Math.max(dur, 0.001)) * 100;
+    const px = (kf - clip.sourceStart) * pps;
+    if (px - lastX < 4) continue;
+    lastX = px;
+    ticks.push(x);
+  }
   return (
     <div
       className={`clip ${clip.kind}${selected ? " selected" : ""}${overlay ? " overlay" : ""}`}
       style={{
         left: clip.timelineStart * pps,
-        width: Math.max(clipDuration(clip) * pps, 8),
+        width: Math.max(dur * pps, 8),
       }}
       onMouseDown={onMove}
-      title={`${clip.kind} ${overlay ? "overlay" : "base"} ${formatTime(clipDuration(clip))}`}
+      title={`${clip.kind} ${overlay ? "overlay" : "base"} ${formatTime(dur)}`}
     >
       <div className="handle left" onMouseDown={onTrimL} />
+      {ticks.map((x) => (
+        <span key={x} className="kf-tick" style={{ left: `${x}%` }} />
+      ))}
       {clip.kind === "audio" ? <Waveform clip={clip} peaks={peaks} sourceDuration={sourceDuration} /> : (
-        <span className="clip-label">{formatTime(clipDuration(clip))}</span>
+        <span className="clip-label">{formatTime(dur)}</span>
       )}
       {clip.linkGroup ? <span className="link-dot" title="Linked A/V" /> : null}
       <div className="handle right" onMouseDown={onTrimR} />
