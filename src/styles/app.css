@@ -53,6 +53,11 @@ body,
   overflow: hidden;
 }
 
+html.is-live-resize,
+html.is-live-resize body {
+  overflow: hidden;
+}
+
 .app {
   display: flex;
   flex-direction: column;

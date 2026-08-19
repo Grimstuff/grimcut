@@ -859,6 +859,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if let Some(win) = app.get_webview_window("main") {
+                windows_sizing::set_app(app.handle().clone());
                 windows_sizing::install_hook(&win);
             }
             Ok(())

@@ -2,7 +2,23 @@
 //! The cursor is free; Windows asks us to rewrite the drag rectangle before apply.
 
 use std::sync::Mutex;
-use tauri::WebviewWindow;
+use tauri::{AppHandle, Emitter, WebviewWindow};
+
+static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
+
+pub fn set_app(app: AppHandle) {
+    if let Ok(mut g) = APP.lock() {
+        *g = Some(app);
+    }
+}
+
+fn emit_ui(event: &'static str) {
+    if let Ok(g) = APP.lock() {
+        if let Some(app) = g.as_ref() {
+            let _ = app.emit(event, ());
+        }
+    }
+}
 
 struct AspectLock {
     enabled: bool,
@@ -67,8 +83,13 @@ mod win {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        if msg == WM_ENTERSIZEMOVE || msg == WM_EXITSIZEMOVE {
+        if msg == WM_ENTERSIZEMOVE {
             LAST_LOCKED_W.store(0, Ordering::SeqCst);
+            super::emit_ui("win-resize-start");
+        }
+        if msg == WM_EXITSIZEMOVE {
+            LAST_LOCKED_W.store(0, Ordering::SeqCst);
+            super::emit_ui("win-resize-end");
         }
         if msg == WM_SIZING {
             constrain(hwnd, wparam.0 as u32, lparam);
