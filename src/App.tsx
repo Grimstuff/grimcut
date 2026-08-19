@@ -6,11 +6,14 @@ import { Preview } from "./components/Preview";
 import { Timeline } from "./components/Timeline";
 import { BusyOverlay } from "./components/BusyOverlay";
 import { useEditor } from "./store/editorStore";
+import { attachAspectLock } from "./lib/fitWindow";
 
 export default function App() {
   const status = useEditor((s) => s.status);
   const openPath = useEditor((s) => s.openPath);
   const setProgress = useEditor((s) => s.setProgress);
+  const mediaW = useEditor((s) => s.media?.width ?? 0);
+  const mediaH = useEditor((s) => s.media?.height ?? 0);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", "dark");
@@ -44,6 +47,15 @@ export default function App() {
       unlistenProg?.();
     };
   }, [openPath, setProgress]);
+
+  useEffect(() => {
+    if (!mediaW || !mediaH) return;
+    let stop: (() => void) | undefined;
+    void attachAspectLock(mediaW / mediaH).then((fn) => {
+      stop = fn;
+    });
+    return () => stop?.();
+  }, [mediaW, mediaH]);
 
   return (
     <div className="app">
