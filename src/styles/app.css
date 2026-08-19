@@ -314,6 +314,37 @@ body,
   min-height: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.tl-scroll:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+.tl-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+
+.tl-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tl-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 99px;
+}
+
+.tl-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.tl-scroll.is-fitted {
+  overflow-x: hidden;
+}
+
+.tl-scroll.is-fitted::-webkit-scrollbar {
+  height: 0;
 }
 
 .lane {
@@ -336,12 +367,18 @@ body,
 .lane-body {
   position: relative;
   height: 100%;
-  flex: 1;
+  flex: 0 0 auto;
+  box-sizing: border-box;
   background: #1a1a1a;
   border: 1px solid var(--gp-border);
   border-radius: 4px;
   min-height: 62px;
   min-width: 0;
+}
+
+.tl-scroll.is-fitted .lane-body {
+  flex: 1 1 auto;
+  width: auto !important;
 }
 
 .lane-video .lane-body { background: #1c2228; }

@@ -42,7 +42,7 @@ export function Timeline() {
   useEffect(() => {
     const measure = () => {
       const el = scroller.current;
-      if (el) trackW.current = Math.max(200, el.clientWidth - GUTTER);
+      if (el) trackW.current = Math.max(200, Math.floor(el.clientWidth - GUTTER));
     };
     measure();
     const el = scroller.current;
@@ -52,9 +52,10 @@ export function Timeline() {
   }, [project]);
 
   const total = Math.max(project ? rulerDuration(project) : 1, 0.1);
+  const fitted = zoom <= 1.001;
   const fitPps = trackW.current / total;
   const pps = fitPps * zoom;
-  const width = Math.max(total * pps, trackW.current);
+  const width = fitted ? trackW.current : Math.ceil(total * pps);
 
   const timeAt = (clientX: number) => {
     const el = scroller.current;
@@ -101,11 +102,15 @@ export function Timeline() {
   useEffect(() => {
     const el = scroller.current;
     if (!el || !project) return;
+    if (fitted) {
+      el.scrollLeft = 0;
+      return;
+    }
     const x = playhead * pps + GUTTER;
     const pad = 48;
     if (x < el.scrollLeft + pad) el.scrollLeft = Math.max(0, x - pad);
     else if (x > el.scrollLeft + el.clientWidth - pad) el.scrollLeft = x - el.clientWidth + pad;
-  }, [playhead, pps, project]);
+  }, [playhead, pps, project, fitted]);
 
   if (!project) return null;
 
@@ -257,7 +262,7 @@ export function Timeline() {
           </button>
         </div>
       </div>
-      <div ref={scroller} className="tl-scroll" onMouseMove={onMove}>
+      <div ref={scroller} className={`tl-scroll${fitted ? " is-fitted" : ""}`} onMouseMove={onMove}>
         {renderLane("video")}
         {renderLane("audio")}
         <div
