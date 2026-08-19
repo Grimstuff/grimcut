@@ -22,7 +22,13 @@ pub struct MediaInfoDto {
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipDto {
+    #[serde(default)]
+    pub gap: bool,
+    #[serde(default)]
+    pub duration: f64,
+    #[serde(default)]
     pub source_start: f64,
+    #[serde(default)]
     pub source_end: f64,
 }
 
@@ -36,6 +42,12 @@ pub struct ExportPlan {
     pub has_audio: bool,
     pub video_codec: Option<String>,
     pub use_stream_copy: bool,
+    #[serde(default)]
+    pub width: Option<i32>,
+    #[serde(default)]
+    pub height: Option<i32>,
+    #[serde(default)]
+    pub frame_rate: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -494,7 +506,14 @@ fn export_video(app: AppHandle, plan: ExportPlan) -> Result<ExportResultDto, Str
         return Err("Nothing to export.".into());
     }
 
-    if plan.use_stream_copy {
+    let has_gap = plan.clips.iter().any(|c| c.gap)
+        || plan
+            .audio_clips
+            .as_ref()
+            .map(|a| a.iter().any(|c| c.gap))
+            .unwrap_or(false);
+
+    if plan.use_stream_copy && !has_gap {
         let _ = app.emit("export-progress", "Stream copy…");
         export_copy(&ffmpeg, &plan)?;
         return Ok(ExportResultDto {
@@ -557,6 +576,9 @@ fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
 }
 
 fn extract_copy(ffmpeg: &Path, src: &str, clip: &ClipDto, dest: &str) -> Result<(), String> {
+    if clip.gap {
+        return Err("Stream copy cannot include timeline gaps.".into());
+    }
     let start = clip.source_start.max(0.0);
     let end = clip.source_end.max(start + 0.02);
     let start_s = format!("{start:.6}");
@@ -608,15 +630,31 @@ fn trim_ffmpeg_err(stderr: &str) -> String {
     }
 }
 
+fn even_dim(n: i32, fallback: i32) -> i32 {
+    let v = if n > 1 { n } else { fallback };
+    v - (v % 2)
+}
+
 fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
+    let w = even_dim(plan.width.unwrap_or(1920), 1920);
+    let h = even_dim(plan.height.unwrap_or(1080), 1080);
+    let fps = plan.frame_rate.filter(|f| *f > 1.0 && *f < 240.0).unwrap_or(30.0);
+
     let mut fc = String::new();
     let mut vpads = String::new();
     for (i, clip) in plan.clips.iter().enumerate() {
-        let start = clip.source_start.max(0.0);
-        let end = clip.source_end.max(start + 0.02);
-        fc.push_str(&format!(
-            "[0:v]trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS[v{i}];"
-        ));
+        if clip.gap {
+            let d = clip.duration.max(0.02);
+            fc.push_str(&format!(
+                "color=c=black:s={w}x{h}:r={fps}:d={d:.6},format=yuv420p,setsar=1[v{i}];"
+            ));
+        } else {
+            let start = clip.source_start.max(0.0);
+            let end = clip.source_end.max(start + 0.02);
+            fc.push_str(&format!(
+                "[0:v]trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={w}:{h}:flags=bicubic,format=yuv420p,setsar=1[v{i}];"
+            ));
+        }
         vpads.push_str(&format!("[v{i}]"));
     }
     fc.push_str(&format!(
@@ -629,11 +667,18 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     if plan.has_audio && !audio_src.is_empty() {
         let mut apads = String::new();
         for (i, clip) in audio_src.iter().enumerate() {
-            let start = clip.source_start.max(0.0);
-            let end = clip.source_end.max(start + 0.02);
-            fc.push_str(&format!(
-                "[0:a]atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS[a{i}];"
-            ));
+            if clip.gap {
+                let d = clip.duration.max(0.02);
+                fc.push_str(&format!(
+                    "anullsrc=r=48000:cl=stereo:d={d:.6},aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
+                ));
+            } else {
+                let start = clip.source_start.max(0.0);
+                let end = clip.source_end.max(start + 0.02);
+                fc.push_str(&format!(
+                    "[0:a]atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
+                ));
+            }
             apads.push_str(&format!("[a{i}]"));
         }
         fc.push_str(&format!(

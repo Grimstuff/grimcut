@@ -61,6 +61,15 @@ describe("timeline model", () => {
     });
     const flat = flattenKind(p, "video");
     expect(flat.length).toBeGreaterThanOrEqual(2);
-    expect(flat.some((r) => r.sourceStart >= 7.9)).toBe(true);
+    expect(flat.some((r) => !r.gap && r.sourceStart >= 7.9)).toBe(true);
+  });
+
+  it("flatten keeps timeline holes as gaps", () => {
+    const p = fromMedia(info);
+    const v = p.clips.find((c) => c.kind === "video")!;
+    v.timelineStart = 2;
+    const flat = flattenKind(p, "video");
+    expect(flat[0]).toEqual({ gap: true, duration: 2 });
+    expect(flat.some((r) => !r.gap)).toBe(true);
   });
 });

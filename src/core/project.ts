@@ -169,8 +169,12 @@ export function snapStart(
   return best;
 }
 
-/** Flatten a kind: overlay wins over base. Merges adjacent source-continuous ranges. */
-export function flattenKind(p: VideoProject, kind: ClipKind): { sourceStart: number; sourceEnd: number }[] {
+export type FlatSeg =
+  | { gap: false; sourceStart: number; sourceEnd: number }
+  | { gap: true; duration: number };
+
+/** Flatten a kind over the full timeline. Empty regions become gaps (black / silence). */
+export function flattenKind(p: VideoProject, kind: ClipKind): FlatSeg[] {
   const end = timelineDuration(p);
   if (end <= 0) return [];
   const marks = new Set<number>([0, end]);
@@ -179,20 +183,29 @@ export function flattenKind(p: VideoProject, kind: ClipKind): { sourceStart: num
     marks.add(clipEnd(c));
   }
   const sorted = [...marks].sort((a, b) => a - b);
-  const out: { sourceStart: number; sourceEnd: number }[] = [];
+  const out: FlatSeg[] = [];
   for (let i = 0; i < sorted.length - 1; i++) {
     const a = sorted[i];
     const b = sorted[i + 1];
     if (b - a < 0.001) continue;
     const c = clipAt(p, (a + b) / 2, kind);
-    if (!c) continue;
+    if (!c) {
+      const last = out[out.length - 1];
+      if (last && last.gap) last.duration += b - a;
+      else out.push({ gap: true, duration: b - a });
+      continue;
+    }
     const srcS = c.sourceStart + (a - c.timelineStart);
     const srcE = c.sourceStart + (b - c.timelineStart);
     const last = out[out.length - 1];
-    if (last && Math.abs(last.sourceEnd - srcS) < 0.02) last.sourceEnd = srcE;
-    else out.push({ sourceStart: srcS, sourceEnd: srcE });
+    if (last && !last.gap && Math.abs(last.sourceEnd - srcS) < 0.02) last.sourceEnd = srcE;
+    else out.push({ gap: false, sourceStart: srcS, sourceEnd: srcE });
   }
-  return out.filter((r) => r.sourceEnd - r.sourceStart > 0.02);
+  return out.filter((r) => (r.gap ? r.duration > 0.01 : r.sourceEnd - r.sourceStart > 0.01));
+}
+
+export function flattenHasGap(segs: FlatSeg[]): boolean {
+  return segs.some((s) => s.gap);
 }
 
 export function replaceClips(p: VideoProject, clips: Clip[]): VideoProject {

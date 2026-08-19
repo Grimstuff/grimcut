@@ -344,7 +344,13 @@ export const useEditor = create<EditorState>((set, get) => ({
     const clips = flattenKind(project, "video");
     const audioClips = flattenKind(project, "audio");
     const videoClips = project.clips.filter((c) => c.kind === "video");
-    const useStreamCopy = canStreamCopyAllClips(videoClips, media.keyframeTimes, media.frameRate) && audioClips.length === clips.length;
+    const hasGap = clips.some((c) => c.gap) || audioClips.some((c) => c.gap);
+    const mediaOnly = (segs: typeof clips) =>
+      segs.filter((s) => !s.gap).map((s) => ({ sourceStart: s.sourceStart, sourceEnd: s.sourceEnd }));
+    const useStreamCopy =
+      !hasGap &&
+      canStreamCopyAllClips(videoClips, media.keyframeTimes, media.frameRate) &&
+      mediaOnly(audioClips).length === mediaOnly(clips).length;
     set({ busy: true, status: useStreamCopy ? "Exporting (stream copy)…" : "Exporting (re-encode)…" });
     try {
       const result = await invoke<{ message: string; outputPath: string }>("export_video", {
@@ -353,9 +359,12 @@ export const useEditor = create<EditorState>((set, get) => ({
           outputPath: dest,
           clips,
           audioClips,
-          hasAudio: media.hasAudio && audioClips.length > 0,
+          hasAudio: media.hasAudio,
           videoCodec: media.videoCodec,
           useStreamCopy,
+          width: media.width,
+          height: media.height,
+          frameRate: media.frameRate,
         },
       });
       set({ busy: false, status: `Saved: ${result.outputPath} · ${result.message}` });
