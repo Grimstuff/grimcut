@@ -10,38 +10,53 @@ export function Preview() {
   const setPlayhead = useEditor((s) => s.setPlayhead);
   const pickOpen = useEditor((s) => s.pickOpen);
 
+  const inGap = useRef(false);
+
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !previewUrl) return;
 
     let raf = 0;
     let lastJump = -1;
+    let ignorePause = false;
 
     const apply = (playing: boolean) => {
+      if (inGap.current) return;
       const r = reportSource(v.currentTime, playing);
-      if (r.seek != null && Math.abs(r.seek - lastJump) > 0.01) {
+      if (r.seek != null && Math.abs(r.seek - lastJump) > 0.02) {
         lastJump = r.seek;
         v.currentTime = r.seek;
       }
-      if (r.gap) {
+      if (r.gap && !inGap.current) {
+        ignorePause = true;
         void v.pause();
         startGap(r.gap);
       }
-      if (r.stop) void v.pause();
+      if (r.stop) {
+        ignorePause = true;
+        void v.pause();
+      }
     };
 
     const loop = () => {
-      if (!v.paused && !v.ended) apply(true);
+      if (!inGap.current && !v.paused && !v.ended) apply(true);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
 
     const onPlay = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(loop);
+      inGap.current = false;
     };
-    const onPause = () => apply(false);
-    const onSeeked = () => apply(!v.paused);
+    const onPause = () => {
+      if (ignorePause) {
+        ignorePause = false;
+        return;
+      }
+      if (!inGap.current) apply(false);
+    };
+    const onSeeked = () => {
+      if (!inGap.current) apply(!v.paused);
+    };
 
     v.addEventListener("play", onPlay);
     v.addEventListener("pause", onPause);
@@ -55,9 +70,12 @@ export function Preview() {
   }, [previewUrl, reportSource]);
 
   function startGap(gap: { end: number; source: number; id: string }) {
+    if (inGap.current) return;
+    inGap.current = true;
     if (gapTimer.current) window.clearInterval(gapTimer.current);
     const t0 = performance.now();
-    const start = useEditor.getState().playhead;
+    const start = Math.min(useEditor.getState().playhead, gap.end);
+    useEditor.setState({ playhead: start, showBlack: true, selectedId: gap.id });
     gapTimer.current = window.setInterval(() => {
       const now = start + (performance.now() - t0) / 1000;
       if (now >= gap.end) {
@@ -67,7 +85,18 @@ export function Preview() {
         const v = videoRef.current;
         if (v) {
           v.currentTime = gap.source;
-          void v.play();
+          let done = false;
+          const go = () => {
+            if (done) return;
+            done = true;
+            v.removeEventListener("seeked", go);
+            inGap.current = false;
+            void v.play();
+          };
+          v.addEventListener("seeked", go);
+          window.setTimeout(go, 120);
+        } else {
+          inGap.current = false;
         }
         return;
       }
@@ -93,6 +122,7 @@ export function Preview() {
         if (gapTimer.current) {
           window.clearInterval(gapTimer.current);
           gapTimer.current = null;
+          inGap.current = false;
           return;
         }
         if (v) {

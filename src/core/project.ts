@@ -97,39 +97,39 @@ export function followSourcePlayback(
   const vids = clipsOn(p, "video");
   if (vids.length === 0) return { kind: "stop", timeline: 0 };
 
-  const covering =
-    (currentId ? vids.find((c) => c.id === currentId && source >= c.sourceStart && source < c.sourceEnd) : null) ??
-    vids.find((c) => source >= c.sourceStart && source < c.sourceEnd);
-
-  if (!covering) {
-    const next = vids.find((c) => c.sourceStart >= source - 0.001);
-    const prev = [...vids].reverse().find((c) => c.sourceEnd <= source + 0.05);
-    if (prev && next && next.timelineStart - clipEnd(prev) > 0.005) {
-      return {
-        kind: "gap",
-        timeline: clipEnd(prev),
-        gapEnd: next.timelineStart,
-        seekSource: next.sourceStart,
-        segmentId: next.id,
-      };
-    }
-    if (next) return { kind: "jump", timeline: next.timelineStart, seekSource: next.sourceStart, segmentId: next.id };
-    return { kind: "stop", timeline: timelineDuration(p) };
+  const byId = currentId ? vids.find((c) => c.id === currentId) : undefined;
+  // Stick to the clip we're playing; only use source matching if we have no current id.
+  let covering =
+    byId && source >= byId.sourceStart && source < byId.sourceEnd - 0.002
+      ? byId
+      : null;
+  if (!covering && !currentId) {
+    covering = vids.find((c) => source >= c.sourceStart && source < c.sourceEnd) ?? null;
   }
 
-  const next = nextVideoAfter(p, clipEnd(covering), covering.id);
-  if (next && source >= covering.sourceEnd - 0.035) {
-    const hole = next.timelineStart - clipEnd(covering);
+  const leave = (from: Clip): PlaybackFollow => {
+    const next = nextVideoAfter(p, clipEnd(from), from.id);
+    if (!next) return { kind: "stop", timeline: timelineDuration(p) };
+    const hole = next.timelineStart - clipEnd(from);
     if (hole > 0.005) {
       return {
         kind: "gap",
-        timeline: clipEnd(covering),
+        timeline: clipEnd(from),
         gapEnd: next.timelineStart,
         seekSource: next.sourceStart,
         segmentId: next.id,
       };
     }
     return { kind: "jump", timeline: next.timelineStart, seekSource: next.sourceStart, segmentId: next.id };
+  };
+
+  if (byId && source >= byId.sourceEnd - 0.04) return leave(byId);
+  if (!covering) {
+    const next = vids.find((c) => c.sourceStart >= source - 0.02 || c.timelineStart >= 0);
+    const prev = [...vids].reverse().find((c) => c.sourceEnd <= source + 0.05);
+    if (prev) return leave(prev);
+    if (next) return { kind: "jump", timeline: next.timelineStart, seekSource: next.sourceStart, segmentId: next.id };
+    return { kind: "stop", timeline: timelineDuration(p) };
   }
 
   return {

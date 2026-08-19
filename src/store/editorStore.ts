@@ -213,7 +213,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       return { seek: follow.seekSource };
     }
     if (follow.kind === "gap" && follow.gapEnd != null && follow.seekSource != null && follow.segmentId) {
-      set({ showBlack: true, selectedId: null });
+      set({ showBlack: true, playhead: follow.timeline });
       return { gap: { end: follow.gapEnd, source: follow.seekSource, id: follow.segmentId } };
     }
     if (follow.kind === "stop") {
