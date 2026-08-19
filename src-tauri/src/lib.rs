@@ -290,7 +290,16 @@ fn encoder_catalog() -> [EncoderOpt; 5] {
         EncoderOpt {
             id: "h264_amf",
             label: "AMD AMF",
-            args: vec!["-c:v", "h264_amf", "-quality", "balanced", "-pix_fmt", "yuv420p"],
+            args: vec![
+                "-c:v",
+                "h264_amf",
+                "-usage",
+                "transcoding",
+                "-quality",
+                "balanced",
+                "-pix_fmt",
+                "yuv420p",
+            ],
         },
         EncoderOpt {
             id: "h264_qsv",
@@ -311,6 +320,8 @@ fn encoder_catalog() -> [EncoderOpt; 5] {
 }
 
 fn encoder_smoke_test(ffmpeg: &Path, args: &[&str]) -> bool {
+    // AMD VCN/AMF rejects tiny frames (128x72 → Init error 5). 640x360 is safe
+    // for AMF, NVENC, and QSV.
     let mut cmd = vec![
         "-hide_banner",
         "-nostdin",
@@ -318,10 +329,10 @@ fn encoder_smoke_test(ffmpeg: &Path, args: &[&str]) -> bool {
         "-f",
         "lavfi",
         "-i",
-        "color=c=black:s=128x72:d=0.15:r=24",
+        "color=c=black:s=640x360:d=0.25:r=30",
     ];
     cmd.extend_from_slice(args);
-    cmd.extend_from_slice(&["-frames:v", "4", "-f", "null", "-"]);
+    cmd.extend_from_slice(&["-frames:v", "8", "-f", "null", "-"]);
     matches!(run_cmd(ffmpeg, &cmd), Ok((_, _, 0)))
 }
 
