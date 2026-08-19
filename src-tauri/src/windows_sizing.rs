@@ -38,8 +38,8 @@ mod win {
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_LEFT,
-        WMSZ_RIGHT, WMSZ_TOPLEFT,
+        CallWindowProcW, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC, WM_SIZING, WMSZ_BOTTOMLEFT,
+        WMSZ_LEFT, WMSZ_TOPLEFT,
     };
 
     static INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -95,25 +95,24 @@ mod win {
         drop(lock);
 
         let rect = unsafe { &mut *(lparam.0 as *mut RECT) };
-        let mut w = rect.right - rect.left;
+        let mut current = RECT::default();
+        let _ = unsafe { GetWindowRect(hwnd, &mut current) };
+        let dh = (rect.bottom - rect.top) - (current.bottom - current.top);
+
+        let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
         let preview_h = (h - extra).max(80);
         let locked_w = ((aspect * preview_h as f64).round() as i32).max(min_w);
-
         let left_edge = matches!(edge, WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT);
-        let horizontal_only = matches!(edge, WMSZ_LEFT | WMSZ_RIGHT);
 
-        if horizontal_only {
-            // Wider than the video is allowed; narrower is not.
-            if w < locked_w {
-                w = locked_w;
-                apply_width(rect, left_edge, w);
-            }
-            return;
+        // Height actually changing (up/down or a real diagonal) → AR lock.
+        // Width-only (including "rightward" grabs that Windows reports as a corner) →
+        // allow oversized (side bars), never undersized.
+        if dh.abs() >= 3 {
+            apply_width(rect, left_edge, locked_w);
+        } else if w < locked_w {
+            apply_width(rect, left_edge, locked_w);
         }
-
-        // Corner / top / bottom: height is master (cursor can leave the frame).
-        apply_width(rect, left_edge, locked_w);
     }
 
     fn apply_width(rect: &mut RECT, keep_right: bool, w: i32) {
