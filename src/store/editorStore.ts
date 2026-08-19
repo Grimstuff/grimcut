@@ -1,22 +1,30 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ClipSegment, MediaInfo, VideoProject } from "../core/types";
-import { clipDuration, formatTime } from "../core/types";
+import type { Clip, ClipKind, ClipboardChunk, MediaInfo, TimeRange, VideoProject } from "../core/types";
+import { formatTime } from "../core/types";
 import {
-  clampTimeline,
+  clipAt,
+  flattenKind,
   followSourcePlayback,
   fromMedia,
-  getSegmentAtTimeline,
   isTimelineGap,
   mapTimelineToSource,
-  nextClipAfter,
+  nextVideoAfter,
   rulerDuration,
-  snapTimelineStart,
+  snapStart,
   timelineDuration,
 } from "../core/project";
-import { UndoStack, tryCut, tryDelete, tryMove, tryTrim } from "../core/edits";
+import {
+  UndoStack,
+  chunkFromRange,
+  tryDelete,
+  tryMove,
+  tryPaste,
+  trySlice,
+  tryToggleLink,
+  tryTrim,
+} from "../core/edits";
 import { canStreamCopyAllClips } from "../core/keyframes";
 
 const history = new UndoStack();
@@ -34,21 +42,35 @@ type EditorState = {
   canRedo: boolean;
   undoLabel: string;
   redoLabel: string;
+  peaks: number[];
+  zoom: number;
+  viewStart: number;
+  range: (TimeRange & { kind: ClipKind }) | null;
+  clipboard: ClipboardChunk | null;
   openPath: (path: string) => Promise<void>;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
-  setPlayhead: (t: number, seek: boolean) => number | null;
-  reportSource: (source: number, playing: boolean) => { seek?: number; gap?: { end: number; source: number; id: string }; stop?: boolean };
-  cut: () => void;
+  setPlayhead: (t: number) => number | null;
+  reportSource: (source: number, playing: boolean) => {
+    seek?: number;
+    gap?: { end: number; source: number; id: string };
+    stop?: boolean;
+  };
+  slice: (at?: number, clipId?: string) => void;
   del: () => void;
   undo: () => void;
   redo: () => void;
-  select: (id: string) => void;
-  liveTrimLeft: (id: string, sourceStart: number) => void;
-  liveTrimRight: (id: string, sourceEnd: number) => void;
+  select: (id: string | null) => void;
+  liveTrim: (id: string, edge: "left" | "right", sourceEdge: number) => void;
   liveMove: (id: string, timelineStart: number) => void;
-  commit: (before: ClipSegment[], label: string) => void;
-  snapshot: () => ClipSegment[] | null;
+  commit: (before: Clip[], label: string) => void;
+  snapshot: () => Clip[] | null;
+  toggleLink: (id: string) => void;
+  setRange: (r: (TimeRange & { kind: ClipKind }) | null) => void;
+  copyRange: () => void;
+  paste: (kind?: ClipKind) => void;
+  setZoom: (z: number, anchorTime?: number) => void;
+  setViewStart: (t: number) => void;
   exportVideo: () => Promise<void>;
 };
 
@@ -60,6 +82,13 @@ function syncHist(s: Partial<EditorState>): Partial<EditorState> {
     undoLabel: history.undoLabel,
     redoLabel: history.redoLabel,
   };
+}
+
+function applyClips(get: () => EditorState, set: (s: Partial<EditorState>) => void, clips: Clip[], label: string) {
+  const p = get().project;
+  if (!p) return;
+  history.push(p.clips, clips, label);
+  set(syncHist({ project: { ...p, clips }, status: label }));
 }
 
 export const useEditor = create<EditorState>((set, get) => ({
@@ -75,6 +104,11 @@ export const useEditor = create<EditorState>((set, get) => ({
   canRedo: false,
   undoLabel: "Undo",
   redoLabel: "Redo",
+  peaks: [],
+  zoom: 80,
+  viewStart: 0,
+  range: null,
+  clipboard: null,
 
   openPath: async (path) => {
     set({ busy: true, status: "Probing…" });
@@ -83,14 +117,19 @@ export const useEditor = create<EditorState>((set, get) => ({
       history.clear();
       const project = fromMedia(media);
       let previewUrl = convertFileSrc(path);
-      const ext = path.toLowerCase();
-      const nativeOk = /\.(mp4|m4v|webm|mov)$/i.test(ext);
-      if (!nativeOk) {
+      if (!/\.(mp4|m4v|webm|mov)$/i.test(path)) {
         try {
-          const proxy = await invoke<string>("make_proxy", { path });
-          previewUrl = convertFileSrc(proxy);
+          previewUrl = convertFileSrc(await invoke<string>("make_proxy", { path }));
         } catch {
-          /* try native anyway */
+          /* native */
+        }
+      }
+      let peaks: number[] = [];
+      if (media.hasAudio) {
+        try {
+          peaks = await invoke<number[]>("waveform", { path });
+        } catch {
+          peaks = [];
         }
       }
       set(
@@ -98,11 +137,16 @@ export const useEditor = create<EditorState>((set, get) => ({
           project,
           media,
           playhead: 0,
-          selectedId: project.segments[0]?.id ?? null,
+          selectedId: project.clips[0]?.id ?? null,
           previewUrl,
           showBlack: false,
           busy: false,
-          status: `${path.split(/[/\\]/).pop()} — ${formatTime(media.duration)}${media.width ? ` · ${media.width}×${media.height}` : ""} · ${media.keyframeTimes.length} KF`,
+          peaks,
+          zoom: Math.max(40, Math.min(140, 900 / Math.max(media.duration, 1))),
+          viewStart: 0,
+          range: null,
+          clipboard: null,
+          status: `${path.split(/[/\\]/).pop()} — ${formatTime(media.duration)}`,
         }),
       );
     } catch (e) {
@@ -128,21 +172,23 @@ export const useEditor = create<EditorState>((set, get) => ({
         selectedId: null,
         previewUrl: null,
         showBlack: false,
+        peaks: [],
+        range: null,
         status: "Drop a video or File → Open…",
       }),
     );
   },
 
-  setPlayhead: (t, _seek) => {
+  setPlayhead: (t) => {
     const p = get().project;
     if (!p) return null;
     const max = rulerDuration(p);
     const playhead = Math.max(0, Math.min(max, t));
-    const hit = getSegmentAtTimeline(p, playhead);
+    const hit = clipAt(p, playhead, "video");
     const mapped = mapTimelineToSource(p, playhead);
     set({
       playhead,
-      selectedId: hit?.segment.id ?? get().selectedId,
+      selectedId: hit?.id ?? get().selectedId,
       showBlack: isTimelineGap(p, playhead),
     });
     return mapped?.source ?? null;
@@ -152,7 +198,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const p = get().project;
     if (!p) return {};
     if (!playing) {
-      const hit = p.segments.find((s) => source >= s.sourceStart && source < s.sourceEnd);
+      const hit = p.clips.find((c) => c.kind === "video" && source >= c.sourceStart && source < c.sourceEnd);
       if (hit) {
         const tl = hit.timelineStart + (source - hit.sourceStart);
         if (Math.abs(get().playhead - tl) > 0.008) set({ playhead: tl, selectedId: hit.id, showBlack: false });
@@ -161,9 +207,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }
     const follow = followSourcePlayback(p, source, get().selectedId);
     if (Math.abs(get().playhead - follow.timeline) > 0.008) set({ playhead: follow.timeline });
-    if (follow.kind === "continue" && follow.segmentId) {
-      set({ selectedId: follow.segmentId, showBlack: false });
-    }
+    if (follow.kind === "continue" && follow.segmentId) set({ selectedId: follow.segmentId, showBlack: false });
     if (follow.kind === "jump" && follow.seekSource != null) {
       if (follow.segmentId) set({ selectedId: follow.segmentId, showBlack: false });
       return { seek: follow.seekSource };
@@ -173,22 +217,21 @@ export const useEditor = create<EditorState>((set, get) => ({
       return { gap: { end: follow.gapEnd, source: follow.seekSource, id: follow.segmentId } };
     }
     if (follow.kind === "stop") {
-      set({ playhead: clampTimeline(p, follow.timeline), showBlack: isTimelineGap(p, follow.timeline) });
+      set({ playhead: follow.timeline, showBlack: isTimelineGap(p, follow.timeline) });
       return { stop: true };
     }
     return {};
   },
 
-  cut: () => {
+  slice: (at, clipId) => {
     const p = get().project;
     if (!p) return;
-    const r = tryCut(p, get().playhead);
+    const r = trySlice(p, at ?? get().playhead, clipId);
     if (!r.ok) {
       set({ status: r.error });
       return;
     }
-    history.push(p.segments, r.segments, "Cut");
-    set(syncHist({ project: { ...p, segments: r.segments }, status: `Cut at ${formatTime(get().playhead)} · ${r.segments.length} clips` }));
+    applyClips(get, set, r.clips, "Slice");
   },
 
   del: () => {
@@ -200,75 +243,118 @@ export const useEditor = create<EditorState>((set, get) => ({
       set({ status: r.error });
       return;
     }
-    history.push(p.segments, r.segments, "Delete clip");
-    const next = { ...p, segments: r.segments };
-    set(
-      syncHist({
-        project: next,
-        selectedId: r.segments[0]?.id ?? null,
-        playhead: clampTimeline(next, get().playhead),
-        showBlack: isTimelineGap(next, get().playhead),
-        status: `Deleted clip · ${r.segments.length} remaining`,
-      }),
-    );
+    applyClips(get, set, r.clips, "Delete");
   },
 
   undo: () => {
     const p = get().project;
-    const segs = history.popUndo();
-    if (!p || !segs) return;
-    const next = { ...p, segments: segs };
-    set(syncHist({ project: next, status: history.undoLabel, playhead: clampTimeline(next, get().playhead) }));
+    const clips = history.popUndo();
+    if (!p || !clips) return;
+    set(syncHist({ project: { ...p, clips } }));
   },
 
   redo: () => {
     const p = get().project;
-    const segs = history.popRedo();
-    if (!p || !segs) return;
-    const next = { ...p, segments: segs };
-    set(syncHist({ project: next, status: history.redoLabel, playhead: clampTimeline(next, get().playhead) }));
+    const clips = history.popRedo();
+    if (!p || !clips) return;
+    set(syncHist({ project: { ...p, clips } }));
   },
 
   select: (id) => set({ selectedId: id }),
 
-  liveTrimLeft: (id, sourceStart) => {
+  liveTrim: (id, edge, sourceEdge) => {
     const p = get().project;
     if (!p) return;
-    const seg = p.segments.find((s) => s.id === id);
-    if (!seg) return;
-    const fixedEnd = seg.timelineStart + clipDuration(seg);
-    let start = Math.max(0, sourceStart);
-    if (start > seg.sourceEnd - 0.05) start = seg.sourceEnd - 0.05;
-    const dur = seg.sourceEnd - start;
-    const r = tryTrim(p, id, { sourceStart: start, timelineStart: Math.max(0, fixedEnd - dur) });
-    if (r.ok) set({ project: { ...p, segments: r.segments } });
-  },
-
-  liveTrimRight: (id, sourceEnd) => {
-    const p = get().project;
-    if (!p) return;
-    const r = tryTrim(p, id, { sourceEnd });
-    if (r.ok) set({ project: { ...p, segments: r.segments } });
+    const r = tryTrim(p, id, edge, sourceEdge);
+    if (r.ok) set({ project: { ...p, clips: r.clips } });
   },
 
   liveMove: (id, timelineStart) => {
     const p = get().project;
     if (!p) return;
-    const seg = p.segments.find((s) => s.id === id);
-    if (!seg) return;
-    const snapped = snapTimelineStart(p, id, timelineStart, clipDuration(seg));
+    const clip = p.clips.find((c) => c.id === id);
+    if (!clip) return;
+    const snapped = snapStart(p, { ...clip, timelineStart }, timelineStart);
     const r = tryMove(p, id, snapped);
-    if (r.ok) set({ project: { ...p, segments: r.segments } });
+    if (r.ok) set({ project: { ...p, clips: r.clips } });
   },
 
   commit: (before, label) => {
     const p = get().project;
     if (!p) return;
-    history.push(before, p.segments, label);
-    set(syncHist({ status: `${label} · timeline ${formatTime(timelineDuration(p))}` }));
+    history.push(before, p.clips, label);
+    set(syncHist({ status: `${label} · ${formatTime(timelineDuration(p))}` }));
   },
 
-  snapshot: () => get().project?.segments.map((s) => ({ ...s })) ?? null,
+  snapshot: () => get().project?.clips.map((s) => ({ ...s })) ?? null,
+
+  toggleLink: (id) => {
+    const p = get().project;
+    if (!p) return;
+    const r = tryToggleLink(p, id);
+    if (!r.ok) {
+      set({ status: r.error });
+      return;
+    }
+    applyClips(get, set, r.clips, r.clips.some((c) => c.id === id && c.linkGroup) ? "Link A/V" : "Unlink A/V");
+  },
+
+  setRange: (range) => set({ range }),
+
+  copyRange: () => {
+    const p = get().project;
+    const range = get().range;
+    if (!p || !range) {
+      const id = get().selectedId;
+      const c = p?.clips.find((x) => x.id === id);
+      if (c) {
+        set({
+          clipboard: { kind: c.kind, sourceStart: c.sourceStart, sourceEnd: c.sourceEnd },
+          status: "Copied clip",
+        });
+      }
+      return;
+    }
+    const chunk = chunkFromRange(p, range.kind, range.start, range.end);
+    if (!chunk) {
+      set({ status: "Nothing to copy in that range." });
+      return;
+    }
+    set({ clipboard: chunk, status: `Copied ${chunk.kind} ${formatTime(chunk.sourceEnd - chunk.sourceStart)}` });
+  },
+
+  paste: (kind) => {
+    const p = get().project;
+    const clip = get().clipboard;
+    if (!p || !clip) {
+      set({ status: "Clipboard empty." });
+      return;
+    }
+    const chunk = kind ? { ...clip, kind } : clip;
+    const r = tryPaste(p, chunk, get().playhead);
+    if (!r.ok) {
+      set({ status: r.error });
+      return;
+    }
+    applyClips(get, set, r.clips, "Paste");
+  },
+
+  setZoom: (z, anchorTime) => {
+    const p = get().project;
+    const zoom = Math.max(12, Math.min(400, z));
+    if (!p) {
+      set({ zoom });
+      return;
+    }
+    const anchor = anchorTime ?? get().playhead;
+    const old = get().zoom;
+    const viewStart = get().viewStart;
+    const screen = (anchor - viewStart) * old;
+    const nextStart = Math.max(0, anchor - screen / zoom);
+    set({ zoom, viewStart: nextStart });
+  },
+
+  setViewStart: (t) => set({ viewStart: Math.max(0, t) }),
 
   exportVideo: async () => {
     const { project, media, busy } = get();
@@ -279,19 +365,19 @@ export const useEditor = create<EditorState>((set, get) => ({
       filters: [{ name: "Video", extensions: [suggested.split(".").pop() ?? "mp4"] }],
     });
     if (!dest) return;
-    const clips = [...project.segments]
-      .filter((s) => clipDuration(s) > 0.02)
-      .sort((a, b) => a.timelineStart - b.timelineStart)
-      .map((s) => ({ sourceStart: s.sourceStart, sourceEnd: s.sourceEnd }));
-    const useStreamCopy = canStreamCopyAllClips(project.segments, media.keyframeTimes, media.frameRate);
+    const clips = flattenKind(project, "video");
+    const audioClips = flattenKind(project, "audio");
+    const videoClips = project.clips.filter((c) => c.kind === "video");
+    const useStreamCopy = canStreamCopyAllClips(videoClips, media.keyframeTimes, media.frameRate) && audioClips.length === clips.length;
     set({ busy: true, status: useStreamCopy ? "Exporting (stream copy)…" : "Exporting (re-encode)…" });
     try {
-      const result = await invoke<{ message: string; outputPath: string; mode: string }>("export_video", {
+      const result = await invoke<{ message: string; outputPath: string }>("export_video", {
         plan: {
           sourcePath: project.sourcePath,
           outputPath: dest,
           clips,
-          hasAudio: media.hasAudio,
+          audioClips,
+          hasAudio: media.hasAudio && audioClips.length > 0,
           videoCodec: media.videoCodec,
           useStreamCopy,
         },
@@ -307,7 +393,7 @@ export function gapFromPlayhead(): { end: number; source: number; id: string } |
   const p = useEditor.getState().project;
   const t = useEditor.getState().playhead;
   if (!p || !isTimelineGap(p, t)) return null;
-  const next = nextClipAfter(p, t);
+  const next = nextVideoAfter(p, t);
   if (!next) return null;
   return { end: next.timelineStart, source: next.sourceStart, id: next.id };
 }

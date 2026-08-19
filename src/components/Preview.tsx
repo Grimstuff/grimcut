@@ -92,9 +92,21 @@ export function Preview() {
         e.preventDefault();
         void st.exportVideo();
       }
+      if (e.code === "KeyS" && !e.ctrlKey) {
+        e.preventDefault();
+        st.slice();
+      }
+      if (e.ctrlKey && e.code === "KeyC") {
+        e.preventDefault();
+        st.copyRange();
+      }
+      if (e.ctrlKey && e.code === "KeyV") {
+        e.preventDefault();
+        st.paste(e.shiftKey ? "audio" : undefined);
+      }
       if (e.ctrlKey && e.code === "KeyX") {
         e.preventDefault();
-        st.cut();
+        st.slice();
       }
       if (e.ctrlKey && e.code === "KeyZ") {
         e.preventDefault();
@@ -136,7 +148,7 @@ export function Preview() {
         onLoadedMetadata={() => {
           const v = videoRef.current;
           if (!v) return;
-          const src = setPlayhead(0, true);
+          const src = setPlayhead(0);
           if (src != null) v.currentTime = src;
         }}
       />

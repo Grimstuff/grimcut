@@ -32,6 +32,7 @@ pub struct ExportPlan {
     pub source_path: String,
     pub output_path: String,
     pub clips: Vec<ClipDto>,
+    pub audio_clips: Option<Vec<ClipDto>>,
     pub has_audio: bool,
     pub video_codec: Option<String>,
     pub use_stream_copy: bool,
@@ -256,6 +257,54 @@ fn detect_hw_h264(app: &AppHandle) -> Option<&'static str> {
 }
 
 #[tauri::command]
+fn waveform(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
+    let ffmpeg = ffmpeg_bin(&app, "ffmpeg");
+    let out = Command::new(&ffmpeg)
+        .args([
+            "-hide_banner",
+            "-nostdin",
+            "-i",
+            &path,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "2000",
+            "-f",
+            "u8",
+            "-acodec",
+            "pcm_u8",
+            "pipe:1",
+        ])
+        .output()
+        .map_err(|e| format!("waveform ffmpeg: {e}"))?;
+    if !out.status.success() && out.stdout.is_empty() {
+        return Ok(vec![]);
+    }
+    let raw = out.stdout;
+    if raw.is_empty() {
+        return Ok(vec![]);
+    }
+    const MAX: usize = 2400;
+    let bucket = (raw.len() / MAX).max(1);
+    let mut peaks = Vec::with_capacity(raw.len() / bucket + 1);
+    let mut i = 0;
+    while i < raw.len() {
+        let end = (i + bucket).min(raw.len());
+        let mut peak = 0u8;
+        for &b in &raw[i..end] {
+            let amp = b.abs_diff(128);
+            if amp > peak {
+                peak = amp;
+            }
+        }
+        peaks.push(peak as f32 / 128.0);
+        i = end;
+    }
+    Ok(peaks)
+}
+
+#[tauri::command]
 fn suggest_save(path: String) -> String {
     let p = PathBuf::from(&path);
     let dir = p.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
@@ -431,30 +480,39 @@ fn extract_copy(ffmpeg: &Path, src: &str, clip: &ClipDto, dest: &str) -> Result<
 
 fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
     let mut fc = String::new();
-    let mut pads = String::new();
+    let mut vpads = String::new();
     for (i, clip) in plan.clips.iter().enumerate() {
         let start = clip.source_start.max(0.0);
         let end = clip.source_end.max(start + 0.02);
         fc.push_str(&format!(
             "[0:v]trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS[v{i}];"
         ));
-        if plan.has_audio {
+        vpads.push_str(&format!("[v{i}]"));
+    }
+    fc.push_str(&format!(
+        "{}concat=n={}:v=1:a=0[vout];",
+        vpads,
+        plan.clips.len()
+    ));
+
+    let audio_src = plan.audio_clips.as_ref().unwrap_or(&plan.clips);
+    if plan.has_audio && !audio_src.is_empty() {
+        let mut apads = String::new();
+        for (i, clip) in audio_src.iter().enumerate() {
+            let start = clip.source_start.max(0.0);
+            let end = clip.source_end.max(start + 0.02);
             fc.push_str(&format!(
                 "[0:a]atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS[a{i}];"
             ));
-            pads.push_str(&format!("[v{i}][a{i}]"));
-        } else {
-            pads.push_str(&format!("[v{i}]"));
+            apads.push_str(&format!("[a{i}]"));
         }
-    }
-    if plan.has_audio {
         fc.push_str(&format!(
-            "{}concat=n={}:v=1:a=1[vout][aout]",
-            pads,
-            plan.clips.len()
+            "{}concat=n={}:v=0:a=1[aout]",
+            apads,
+            audio_src.len()
         ));
-    } else {
-        fc.push_str(&format!("{}concat=n={}:v=1:a=0[vout]", pads, plan.clips.len()));
+    } else if fc.ends_with(';') {
+        fc.pop();
     }
 
     let work = std::env::temp_dir().join(format!("grimcut-export-{}", uuid_like()));
@@ -517,6 +575,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             probe,
+            waveform,
             suggest_save,
             make_proxy,
             export_video

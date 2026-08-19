@@ -1,122 +1,92 @@
 import {
-  type ClipSegment,
+  type Clip,
+  type ClipKind,
+  type ClipLayer,
   type MediaInfo,
   type PlaybackFollow,
   type VideoProject,
   clipDuration,
-  clipTimelineEnd,
+  clipEnd,
   cloneClip,
   newId,
+  SNAP,
 } from "./types";
 
 export function fromMedia(info: MediaInfo): VideoProject {
   const duration = info.duration > 0 ? info.duration : 1;
-  return {
-    sourcePath: info.path,
-    sourceDuration: info.duration,
-    segments: [
-      {
-        id: newId(),
-        timelineStart: 0,
-        sourceStart: 0,
-        sourceEnd: duration,
-      },
-    ],
-  };
+  const group = newId();
+  const clips: Clip[] = [
+    {
+      id: newId(),
+      kind: "video",
+      layer: "base",
+      timelineStart: 0,
+      sourceStart: 0,
+      sourceEnd: duration,
+      linkGroup: group,
+    },
+  ];
+  if (info.hasAudio) {
+    clips.push({
+      id: newId(),
+      kind: "audio",
+      layer: "base",
+      timelineStart: 0,
+      sourceStart: 0,
+      sourceEnd: duration,
+      linkGroup: group,
+    });
+  }
+  return { sourcePath: info.path, sourceDuration: info.duration, clips };
 }
 
 export function timelineDuration(p: VideoProject): number {
-  let max = 0;
-  for (const s of p.segments) max = Math.max(max, clipTimelineEnd(s));
-  return max;
+  return p.clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0);
 }
 
 export function rulerDuration(p: VideoProject): number {
   return Math.max(p.sourceDuration, timelineDuration(p), 1);
 }
 
-export function segmentsByTimeline(p: VideoProject): ClipSegment[] {
-  return [...p.segments].sort((a, b) => a.timelineStart - b.timelineStart || a.id.localeCompare(b.id));
+export function clipsOn(p: VideoProject, kind: ClipKind, layer?: ClipLayer): Clip[] {
+  return p.clips
+    .filter((c) => c.kind === kind && (layer ? c.layer === layer : true))
+    .sort((a, b) => a.timelineStart - b.timelineStart);
 }
 
-export function clampTimeline(p: VideoProject, t: number): number {
-  const total = timelineDuration(p);
-  if (t < 0) return 0;
-  if (total <= 0) return 0;
-  return t > total ? total : t;
-}
-
-export function getSegmentAtTimeline(
+export function clipAt(
   p: VideoProject,
   t: number,
-): { segment: ClipSegment; index: number } | null {
-  for (let i = 0; i < p.segments.length; i++) {
-    const s = p.segments[i];
-    if (t >= s.timelineStart && t < clipTimelineEnd(s)) return { segment: s, index: i };
+  kind: ClipKind,
+  layer?: ClipLayer,
+): Clip | null {
+  const list = clipsOn(p, kind, layer);
+  // Overlay wins if no layer specified
+  if (!layer) {
+    const over = list.find((c) => c.layer === "over" && t >= c.timelineStart && t < clipEnd(c));
+    if (over) return over;
   }
-  for (let i = 0; i < p.segments.length; i++) {
-    const s = p.segments[i];
-    if (t === clipTimelineEnd(s) && clipDuration(s) > 0) return { segment: s, index: i };
-  }
-  return null;
+  return list.find((c) => t >= c.timelineStart && t < clipEnd(c)) ?? null;
 }
 
-export function mapTimelineToSource(
-  p: VideoProject,
-  t: number,
-): { source: number; segment: ClipSegment } | null {
-  for (const s of p.segments) {
-    if (t >= s.timelineStart && t < clipTimelineEnd(s)) {
-      return { source: s.sourceStart + (t - s.timelineStart), segment: s };
-    }
-    if (t === clipTimelineEnd(s) && clipDuration(s) > 0) {
-      return { source: s.sourceEnd, segment: s };
-    }
-  }
-  return null;
+export function partner(p: VideoProject, clip: Clip): Clip | null {
+  if (!clip.linkGroup) return null;
+  return p.clips.find((c) => c.id !== clip.id && c.linkGroup === clip.linkGroup) ?? null;
 }
 
 export function isTimelineGap(p: VideoProject, t: number): boolean {
-  return getSegmentAtTimeline(p, t) === null;
+  return clipAt(p, t, "video") === null;
 }
 
-export function nextClipAfter(p: VideoProject, after: number, excludeId?: string): ClipSegment | null {
-  let best: ClipSegment | null = null;
-  for (const s of segmentsByTimeline(p)) {
-    if (excludeId && s.id === excludeId) continue;
-    if (s.timelineStart >= after - 0.001) {
-      if (!best || s.timelineStart < best.timelineStart) best = s;
-    }
-  }
-  return best;
+export function mapTimelineToSource(p: VideoProject, t: number): { source: number; clip: Clip } | null {
+  const c = clipAt(p, t, "video");
+  if (!c) return null;
+  return { source: c.sourceStart + (t - c.timelineStart), clip: c };
 }
 
-function findCovering(p: VideoProject, source: number, preferredId?: string | null): ClipSegment | null {
-  if (preferredId) {
-    const pref = p.segments.find((s) => s.id === preferredId);
-    if (pref && source >= pref.sourceStart && source < pref.sourceEnd) return pref;
-  }
-  return p.segments.find((s) => source >= s.sourceStart && source < s.sourceEnd) ?? null;
-}
-
-export function isSourceVoid(p: VideoProject, source: number): boolean {
-  return findCovering(p, source, null) === null;
-}
-
-function leaveClip(p: VideoProject, cur: ClipSegment): PlaybackFollow {
-  const next = nextClipAfter(p, clipTimelineEnd(cur), cur.id);
-  if (!next) return { kind: "stop", timeline: timelineDuration(p) };
-  const hole = next.timelineStart - clipTimelineEnd(cur);
-  if (hole > 0.005) {
-    return {
-      kind: "gap",
-      timeline: clipTimelineEnd(cur),
-      gapEnd: next.timelineStart,
-      seekSource: next.sourceStart,
-      segmentId: next.id,
-    };
-  }
-  return { kind: "jump", timeline: next.timelineStart, seekSource: next.sourceStart, segmentId: next.id };
+export function nextVideoAfter(p: VideoProject, after: number, excludeId?: string): Clip | null {
+  const vids = clipsOn(p, "video").filter((c) => c.id !== excludeId && c.timelineStart >= after - 0.001);
+  return vids[0] ?? null;
 }
 
 export function followSourcePlayback(
@@ -124,13 +94,43 @@ export function followSourcePlayback(
   source: number,
   currentId?: string | null,
 ): PlaybackFollow {
-  if (p.segments.length === 0) return { kind: "stop", timeline: 0 };
-  const covering = findCovering(p, source, currentId);
-  if (!covering) return resolveSourceVoid(p, source, currentId);
+  const vids = clipsOn(p, "video");
+  if (vids.length === 0) return { kind: "stop", timeline: 0 };
 
-  const next = nextClipAfter(p, clipTimelineEnd(covering), covering.id);
-  if (next && source >= covering.sourceEnd - 0.035) return leaveClip(p, covering);
-  if (source >= covering.sourceEnd) return leaveClip(p, covering);
+  const covering =
+    (currentId ? vids.find((c) => c.id === currentId && source >= c.sourceStart && source < c.sourceEnd) : null) ??
+    vids.find((c) => source >= c.sourceStart && source < c.sourceEnd);
+
+  if (!covering) {
+    const next = vids.find((c) => c.sourceStart >= source - 0.001);
+    const prev = [...vids].reverse().find((c) => c.sourceEnd <= source + 0.05);
+    if (prev && next && next.timelineStart - clipEnd(prev) > 0.005) {
+      return {
+        kind: "gap",
+        timeline: clipEnd(prev),
+        gapEnd: next.timelineStart,
+        seekSource: next.sourceStart,
+        segmentId: next.id,
+      };
+    }
+    if (next) return { kind: "jump", timeline: next.timelineStart, seekSource: next.sourceStart, segmentId: next.id };
+    return { kind: "stop", timeline: timelineDuration(p) };
+  }
+
+  const next = nextVideoAfter(p, clipEnd(covering), covering.id);
+  if (next && source >= covering.sourceEnd - 0.035) {
+    const hole = next.timelineStart - clipEnd(covering);
+    if (hole > 0.005) {
+      return {
+        kind: "gap",
+        timeline: clipEnd(covering),
+        gapEnd: next.timelineStart,
+        seekSource: next.sourceStart,
+        segmentId: next.id,
+      };
+    }
+    return { kind: "jump", timeline: next.timelineStart, seekSource: next.sourceStart, segmentId: next.id };
+  }
 
   return {
     kind: "continue",
@@ -139,81 +139,62 @@ export function followSourcePlayback(
   };
 }
 
-export function resolveSourceVoid(
+export function snapStart(
   p: VideoProject,
-  source: number,
-  currentId?: string | null,
-): PlaybackFollow {
-  let prev: ClipSegment | null = null;
-  for (const s of p.segments) {
-    if (s.sourceEnd <= source + 0.001) {
-      if (!prev || s.sourceEnd > prev.sourceEnd || (s.sourceEnd === prev.sourceEnd && clipTimelineEnd(s) > clipTimelineEnd(prev))) {
-        prev = s;
-      }
-    }
-  }
-  if (currentId) {
-    const cur = p.segments.find((s) => s.id === currentId);
-    if (cur && cur.sourceEnd <= source + 0.05) prev = cur;
-  }
-
-  let next: ClipSegment | null = null;
-  for (const s of segmentsByTimeline(p)) {
-    if (s.sourceStart >= source - 0.001) {
-      next = s;
-      break;
-    }
-  }
-  if (!next && prev) next = nextClipAfter(p, clipTimelineEnd(prev), prev.id);
-
-  if (!prev && !next) return { kind: "stop", timeline: timelineDuration(p) };
-  if (!prev && next) {
-    if (next.timelineStart > 0.005) {
-      return {
-        kind: "gap",
-        timeline: 0,
-        gapEnd: next.timelineStart,
-        seekSource: next.sourceStart,
-        segmentId: next.id,
-      };
-    }
-    return { kind: "jump", timeline: next.timelineStart, seekSource: next.sourceStart, segmentId: next.id };
-  }
-  if (prev && !next) return { kind: "stop", timeline: clipTimelineEnd(prev) };
-  return leaveClip(p, prev!);
-}
-
-export function snapTimelineStart(
-  p: VideoProject,
-  movingId: string,
+  moving: Clip,
   proposed: number,
-  duration: number,
-  threshold = 0.08,
+  threshold = SNAP,
 ): number {
   let start = Math.max(0, proposed);
+  const dur = clipDuration(moving);
   let best = start;
   let bestDist = threshold;
-
-  const consider = (candidate: number) => {
-    const c = Math.max(0, candidate);
-    const dist = Math.abs(c - start);
-    if (dist <= bestDist) {
-      bestDist = dist;
-      best = c;
+  const consider = (c: number) => {
+    const v = Math.max(0, c);
+    const d = Math.abs(v - start);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = v;
     }
   };
-
   consider(0);
-  for (const other of p.segments) {
-    if (other.id === movingId) continue;
-    consider(clipTimelineEnd(other));
+  for (const other of p.clips) {
+    if (other.id === moving.id) continue;
+    if (moving.linkGroup && other.linkGroup === moving.linkGroup) continue;
+    consider(clipEnd(other));
     consider(other.timelineStart);
-    consider(other.timelineStart - duration);
-    consider(clipTimelineEnd(other) - duration);
+    consider(other.timelineStart - dur);
+    consider(clipEnd(other) - dur);
   }
   return best;
 }
 
-export function replaceSegments(p: VideoProject, next: ClipSegment[]): VideoProject {
-  return { ...p, segments: next.map(cloneClip) };
+/** Flatten a kind: overlay wins over base. Merges adjacent source-continuous ranges. */
+export function flattenKind(p: VideoProject, kind: ClipKind): { sourceStart: number; sourceEnd: number }[] {
+  const end = timelineDuration(p);
+  if (end <= 0) return [];
+  const marks = new Set<number>([0, end]);
+  for (const c of clipsOn(p, kind)) {
+    marks.add(c.timelineStart);
+    marks.add(clipEnd(c));
+  }
+  const sorted = [...marks].sort((a, b) => a - b);
+  const out: { sourceStart: number; sourceEnd: number }[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    if (b - a < 0.001) continue;
+    const c = clipAt(p, (a + b) / 2, kind);
+    if (!c) continue;
+    const srcS = c.sourceStart + (a - c.timelineStart);
+    const srcE = c.sourceStart + (b - c.timelineStart);
+    const last = out[out.length - 1];
+    if (last && Math.abs(last.sourceEnd - srcS) < 0.02) last.sourceEnd = srcE;
+    else out.push({ sourceStart: srcS, sourceEnd: srcE });
+  }
+  return out.filter((r) => r.sourceEnd - r.sourceStart > 0.02);
+}
+
+export function replaceClips(p: VideoProject, clips: Clip[]): VideoProject {
+  return { ...p, clips: clips.map(cloneClip) };
 }

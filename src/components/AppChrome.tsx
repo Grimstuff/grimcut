@@ -25,8 +25,10 @@ export function AppChrome() {
   const busy = useEditor((s) => s.busy);
   const pickOpen = useEditor((s) => s.pickOpen);
   const closeProject = useEditor((s) => s.closeProject);
-  const cut = useEditor((s) => s.cut);
+  const slice = useEditor((s) => s.slice);
   const del = useEditor((s) => s.del);
+  const copyRange = useEditor((s) => s.copyRange);
+  const paste = useEditor((s) => s.paste);
   const undo = useEditor((s) => s.undo);
   const redo = useEditor((s) => s.redo);
   const exportVideo = useEditor((s) => s.exportVideo);
@@ -74,11 +76,17 @@ export function AppChrome() {
           </button>
           <div className="menu-sep" />
           <div className="menu-label">Edit</div>
-          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); cut(); }}>
-            Cut at playhead <span className="menu-shortcut">Ctrl+X</span>
+          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); slice(); }}>
+            Slice at playhead <span className="menu-shortcut">S</span>
           </button>
           <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); del(); }}>
             Delete clip <span className="menu-shortcut">Del</span>
+          </button>
+          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); copyRange(); }}>
+            Copy range <span className="menu-shortcut">Ctrl+C</span>
+          </button>
+          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); paste(); }}>
+            Paste <span className="menu-shortcut">Ctrl+V</span>
           </button>
           <button type="button" className="menu-option" disabled={!canUndo} onClick={() => { setMenuOpen(false); undo(); }}>
             {undoLabel} <span className="menu-shortcut">Ctrl+Z</span>

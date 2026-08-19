@@ -1,4 +1,4 @@
-import type { ClipSegment } from "./types";
+import type { Clip } from "./types";
 
 export function toleranceFor(frameRate?: number | null): number {
   if (frameRate && frameRate > 1 && frameRate < 240) return 0.6 / frameRate;
@@ -23,7 +23,7 @@ export function isOnKeyframe(time: number, keyframes: number[], tolerance: numbe
 }
 
 export function canStreamCopyAllClips(
-  clips: ClipSegment[],
+  clips: Clip[],
   keyframes: number[],
   frameRate?: number | null,
 ): boolean {

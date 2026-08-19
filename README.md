@@ -22,14 +22,29 @@ npm run tauri dev
 
 If you already have `Dev\video-editor\tools\ffmpeg`, the repo can use a junction there.
 
+## Timeline
+
+Two horizontal bars: **video** and **audio** (waveform). Linked A/V until you click **Linked**. Overlay layer: paste onto existing clips (max one overlay per bar).
+
+| Action | How |
+|--------|-----|
+| Trim | Drag either end of a clip |
+| Move | Drag the clip (snaps to neighbors) |
+| Zoom | Scroll wheel |
+| Slice | `S`, Ctrl+X, or double-click the bar |
+| Range select | Drag on empty track |
+| Copy / paste | Ctrl+C / Ctrl+V (Shift+V paste as audio) |
+| Unlink A/V | **Linked** button |
+
 ## Shortcuts
 
 | Key | Action |
 |-----|--------|
 | Ctrl+O | Open |
 | Space | Play / pause |
-| Ctrl+X | Cut at playhead |
-| Delete | Delete selected clip |
+| S / Ctrl+X | Slice at playhead |
+| Delete | Delete selected clip (and linked pair) |
+| Ctrl+C / V | Copy range / paste |
 | Ctrl+Z / Y | Undo / redo |
 | Ctrl+S | Save edited video |
 

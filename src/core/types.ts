@@ -1,14 +1,21 @@
-export type ClipSegment = {
+export type ClipKind = "video" | "audio";
+export type ClipLayer = "base" | "over";
+
+export type Clip = {
   id: string;
+  kind: ClipKind;
+  layer: ClipLayer;
   timelineStart: number;
   sourceStart: number;
   sourceEnd: number;
+  /** Shared id with the paired A/V clip; null = unlinked. */
+  linkGroup: string | null;
 };
 
 export type VideoProject = {
   sourcePath: string;
   sourceDuration: number;
-  segments: ClipSegment[];
+  clips: Clip[];
 };
 
 export type MediaInfo = {
@@ -24,6 +31,14 @@ export type MediaInfo = {
   keyframeTimes: number[];
 };
 
+export type TimeRange = { start: number; end: number };
+
+export type ClipboardChunk = {
+  kind: ClipKind;
+  sourceStart: number;
+  sourceEnd: number;
+};
+
 export type PlaybackKind = "continue" | "jump" | "gap" | "stop";
 
 export type PlaybackFollow = {
@@ -35,16 +50,17 @@ export type PlaybackFollow = {
 };
 
 export const MIN_CLIP = 0.05;
+export const SNAP = 0.08;
 
-export function clipDuration(s: ClipSegment): number {
+export function clipDuration(s: Clip): number {
   return Math.max(0, s.sourceEnd - s.sourceStart);
 }
 
-export function clipTimelineEnd(s: ClipSegment): number {
+export function clipEnd(s: Clip): number {
   return s.timelineStart + clipDuration(s);
 }
 
-export function cloneClip(s: ClipSegment): ClipSegment {
+export function cloneClip(s: Clip): Clip {
   return { ...s };
 }
 
@@ -57,6 +73,6 @@ export function formatTime(t: number): string {
   const h = Math.floor(t / 3600);
   const m = Math.floor((t % 3600) / 60);
   const s = t % 60;
-  const body = `${m}:${s.toFixed(2).padStart(5, "0")}`;
-  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s.toFixed(2).padStart(5, "0")}` : body;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${s.toFixed(2).padStart(5, "0")}`;
+  return `${m}:${s.toFixed(2).padStart(5, "0")}`;
 }
