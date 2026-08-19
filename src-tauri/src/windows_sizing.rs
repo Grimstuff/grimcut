@@ -38,8 +38,8 @@ mod win {
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC, WM_SIZING, WMSZ_BOTTOMLEFT,
-        WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOPLEFT,
+        CallWindowProcW, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC, HTLEFT, HTRIGHT, WM_NCHITTEST,
+        WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOPLEFT,
     };
 
     static INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -68,6 +68,11 @@ mod win {
         if msg == WM_SIZING {
             constrain(hwnd, wparam.0 as u32, lparam);
         }
+        if msg == WM_NCHITTEST {
+            if let Some(hit) = side_hit(hwnd, lparam) {
+                return LRESULT(hit);
+            }
+        }
         let orig = ORIG_PROC.load(Ordering::SeqCst);
         unsafe {
             CallWindowProcW(
@@ -95,25 +100,13 @@ mod win {
         drop(lock);
 
         let rect = unsafe { &mut *(lparam.0 as *mut RECT) };
-        let mut current = RECT::default();
-        let _ = unsafe { GetWindowRect(hwnd, &mut current) };
-        let dw = (rect.right - rect.left) - (current.right - current.left);
-        let dh = (rect.bottom - rect.top) - (current.bottom - current.top);
-
         let h = rect.bottom - rect.top;
         let preview_h = (h - extra).max(80);
         let locked_w = ((aspect * preview_h as f64).round() as i32).max(min_w);
         let left_edge = matches!(edge, WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT);
         let side_only = matches!(edge, WMSZ_LEFT | WMSZ_RIGHT);
-        // Frameless hits often report BOTTOMRIGHT for a right-edge drag. If width
-        // is clearly the main motion, treat it as horizontal — don't AR-snap width.
-        let width_dominant = side_only || (dw.abs() > 2 && dw.abs() >= dh.abs() * 2);
 
-        if width_dominant {
-            rect.top = current.top;
-            rect.bottom = current.bottom;
-            let preview_h = (current.bottom - current.top - extra).max(80);
-            let locked_w = ((aspect * preview_h as f64).round() as i32).max(min_w);
+        if side_only {
             let w = rect.right - rect.left;
             if w < locked_w {
                 apply_width(rect, left_edge, locked_w);
@@ -121,6 +114,32 @@ mod win {
         } else {
             apply_width(rect, left_edge, locked_w);
         }
+    }
+
+    /// Prefer HTLEFT/HTRIGHT on the mid-sides so a rightward drag isn't BOTTOMRIGHT.
+    fn side_hit(hwnd: HWND, lparam: LPARAM) -> Option<isize> {
+        let mut wr = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut wr) }.ok()?;
+        let x = (lparam.0 as i32) & 0xffff;
+        let y = ((lparam.0 as u32) >> 16) as i32;
+        // GET_X_LPARAM sign-extend
+        let x = x as i16 as i32;
+        let y = y as i16 as i32;
+        let w = wr.right - wr.left;
+        let h = wr.bottom - wr.top;
+        let edge = 10i32;
+        let corner = 22i32;
+        if y < wr.top + corner || y > wr.bottom - corner {
+            return None;
+        }
+        if x >= wr.left && x <= wr.left + edge {
+            return Some(HTLEFT as isize);
+        }
+        if x <= wr.right && x >= wr.right - edge {
+            return Some(HTRIGHT as isize);
+        }
+        let _ = (w, h);
+        None
     }
 
     fn apply_width(rect: &mut RECT, keep_right: bool, w: i32) {
