@@ -7,7 +7,6 @@ import { Timeline } from "./components/Timeline";
 import { BusyOverlay } from "./components/BusyOverlay";
 import { useEditor } from "./store/editorStore";
 import { pushAspectLock } from "./lib/fitWindow";
-import { applyLiveResizeScale, beginLiveResize, endLiveResize } from "./lib/liveResize";
 
 export default function App() {
   const status = useEditor((s) => s.status);
@@ -20,7 +19,6 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", "dark");
     let unlistenDrop: (() => void) | undefined;
     let unlistenProg: (() => void) | undefined;
-    let unlistenResize: (() => void) | undefined;
     (async () => {
       try {
         const webview = getCurrentWebview();
@@ -43,25 +41,10 @@ export default function App() {
       } catch {
         /* not in tauri */
       }
-      try {
-        const a = await listen("win-resize-start", () => beginLiveResize());
-        const b = await listen("win-resize-end", () => endLiveResize());
-        const onWin = () => applyLiveResizeScale();
-        window.addEventListener("resize", onWin);
-        unlistenResize = () => {
-          a();
-          b();
-          window.removeEventListener("resize", onWin);
-          endLiveResize();
-        };
-      } catch {
-        /* not in tauri */
-      }
     })();
     return () => {
       unlistenDrop?.();
       unlistenProg?.();
-      unlistenResize?.();
     };
   }, [openPath, setProgress]);
 
