@@ -95,8 +95,19 @@ fn ffmpeg_bin(app: &AppHandle, name: &str) -> PathBuf {
     tools_dir(app).join(format!("{name}.exe"))
 }
 
+fn hidden_command(bin: impl AsRef<Path>) -> Command {
+    let mut cmd = Command::new(bin.as_ref());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 fn run_cmd(bin: &Path, args: &[&str]) -> Result<(String, String, i32), String> {
-    let out = Command::new(bin)
+    let out = hidden_command(bin)
         .args(args)
         .output()
         .map_err(|e| format!("Failed to start {}: {e}", bin.display()))?;
@@ -251,6 +262,7 @@ fn load_keyframes(ffprobe: &Path, path: &str) -> Vec<f64> {
     times
 }
 
+#[derive(Clone)]
 struct EncoderOpt {
     id: &'static str,
     label: &'static str,
@@ -259,8 +271,8 @@ struct EncoderOpt {
 
 fn gpu_adapter_names() -> String {
     let ps = r#"Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }"#;
-    if let Ok(out) = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+    if let Ok(out) = hidden_command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps])
         .output()
     {
         return String::from_utf8_lossy(&out.stdout).to_lowercase();
@@ -350,6 +362,10 @@ fn encoder_smoke_test(ffmpeg: &Path, args: &[&str]) -> bool {
 
 /// Encoders that actually work on this machine, GPU-first (not merely compiled into FFmpeg).
 fn working_encoders(ffmpeg: &Path) -> Vec<EncoderOpt> {
+    static CACHE: std::sync::OnceLock<Vec<EncoderOpt>> = std::sync::OnceLock::new();
+    if let Some(c) = CACHE.get() {
+        return c.clone();
+    }
     let catalog = encoder_catalog();
     let mut picked: Vec<EncoderOpt> = Vec::new();
     for id in encoder_priority() {
@@ -378,13 +394,13 @@ fn working_encoders(ffmpeg: &Path) -> Vec<EncoderOpt> {
             });
         }
     }
-    picked
+    CACHE.get_or_init(|| picked.clone()).clone()
 }
 
 #[tauri::command]
 fn waveform(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
     let ffmpeg = ffmpeg_bin(&app, "ffmpeg");
-    let out = Command::new(&ffmpeg)
+    let out = hidden_command(&ffmpeg)
         .args([
             "-hide_banner",
             "-nostdin",

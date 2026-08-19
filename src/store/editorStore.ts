@@ -47,6 +47,7 @@ type EditorState = {
   clipboard: ClipboardChunk | null;
   playing: boolean;
   menuOpen: boolean;
+  progress: { label: string; pct: number } | null;
   openPath: (path: string) => Promise<void>;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
@@ -68,6 +69,7 @@ type EditorState = {
   setViewStart: (t: number) => void;
   setPlaying: (v: boolean) => void;
   setMenuOpen: (v: boolean) => void;
+  setProgress: (p: { label: string; pct: number } | null) => void;
   exportVideo: () => Promise<void>;
 };
 
@@ -108,16 +110,19 @@ export const useEditor = create<EditorState>((set, get) => ({
   clipboard: null,
   playing: false,
   menuOpen: false,
+  progress: null,
 
   setPlaying: (v) => set({ playing: v }),
   setMenuOpen: (v) => set({ menuOpen: v }),
+  setProgress: (p) => set({ progress: p, busy: p != null }),
 
   openPath: async (path) => {
-    set({ busy: true, status: "Probing…" });
+    set({ busy: true, progress: { label: "Reading media…", pct: 8 }, status: "Opening…" });
     try {
       const media = await invoke<MediaInfo>("probe", { path });
       history.clear();
       const project = fromMedia(media);
+      set({ progress: { label: "Preparing preview…", pct: 40 } });
       let previewUrl = convertFileSrc(path);
       if (!/\.(mp4|m4v|webm|mov)$/i.test(path)) {
         try {
@@ -128,6 +133,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       }
       let peaks: number[] = [];
       if (media.hasAudio) {
+        set({ progress: { label: "Building waveform…", pct: 65 } });
         try {
           peaks = await invoke<number[]>("waveform", { path });
         } catch {
@@ -143,6 +149,7 @@ export const useEditor = create<EditorState>((set, get) => ({
           previewUrl,
           showBlack: false,
           busy: false,
+          progress: null,
           peaks,
           zoom: 1,
           viewStart: 0,
@@ -153,7 +160,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         }),
       );
     } catch (e) {
-      set({ busy: false, status: String(e) });
+      set({ busy: false, progress: null, status: String(e) });
     }
   },
 
@@ -178,6 +185,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         peaks: [],
         range: null,
         playing: false,
+        progress: null,
         status: "Drop a video or File → Open…",
       }),
     );
@@ -381,7 +389,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       !hasGap &&
       canStreamCopyAllClips(videoClips, media.keyframeTimes, media.frameRate) &&
       mediaOnly(audioClips).length === mediaOnly(clips).length;
-    set({ busy: true, status: useStreamCopy ? "Exporting (stream copy)…" : "Exporting (re-encode)…" });
+    set({
+      busy: true,
+      progress: { label: useStreamCopy ? "Saving (stream copy)…" : "Saving…", pct: 12 },
+      status: useStreamCopy ? "Exporting (stream copy)…" : "Exporting (re-encode)…",
+    });
     try {
       const result = await invoke<{ message: string; outputPath: string }>("export_video", {
         plan: {
@@ -397,11 +409,11 @@ export const useEditor = create<EditorState>((set, get) => ({
           frameRate: media.frameRate,
         },
       });
-      set({ busy: false, status: `Saved: ${result.outputPath} · ${result.message}` });
+      set({ busy: false, progress: null, status: `Saved: ${result.outputPath} · ${result.message}` });
     } catch (e) {
       const text = String(e).replace(/^Error:\s*/i, "");
       const short = text.split("\n").filter(Boolean).slice(-1)[0] ?? text;
-      set({ busy: false, status: `Export failed: ${short}` });
+      set({ busy: false, progress: null, status: `Export failed: ${short}` });
       try {
         await navigator.clipboard.writeText(text);
       } catch {

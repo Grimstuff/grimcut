@@ -1,3 +1,50 @@
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  pointer-events: all;
+}
+
+.busy-card {
+  min-width: 280px;
+  max-width: 420px;
+  padding: 20px 22px 16px;
+  border-radius: 10px;
+  background: var(--gp-surface-elevated);
+  border: 1px solid var(--gp-border);
+  box-shadow: var(--gp-menu-shadow);
+}
+
+.busy-label {
+  font-size: 13px;
+  color: var(--gp-text);
+  margin-bottom: 12px;
+}
+
+.busy-track {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--gp-border-subtle);
+  overflow: hidden;
+}
+
+.busy-fill {
+  height: 100%;
+  background: var(--gp-accent);
+  border-radius: 99px;
+  transition: width 0.2s ease;
+}
+
+.busy-pct {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--gp-text-muted);
+  text-align: right;
+}
+
 html,
 body,
 #root {
