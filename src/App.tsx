@@ -69,8 +69,8 @@ export default function App() {
     <div className="app">
       <AppChrome />
       <div className="workspace">
-        <Preview />
         <Timeline />
+        <Preview />
       </div>
       <footer className="status">{status}</footer>
       <BusyOverlay />
