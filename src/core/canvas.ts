@@ -117,7 +117,7 @@ export function canvasGuides(cw: number, ch: number) {
   };
 }
 
-export function snapTo(v: number, guides: number[], thresh: number): { v: number; hit: number | null } {
+export function snapTo(v: number, guides: number[], thresh: number): { v: number; hit: number | null; dist: number } {
   let best = v;
   let d = thresh;
   let hit: number | null = null;
@@ -129,7 +129,7 @@ export function snapTo(v: number, guides: number[], thresh: number): { v: number
       hit = g;
     }
   }
-  return { v: best, hit };
+  return { v: best, hit, dist: hit == null ? Infinity : d };
 }
 
 export function snapRotation(deg: number, thresh = 5): number {

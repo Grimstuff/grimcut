@@ -284,9 +284,12 @@ export function Preview() {
     if (!p || !clip) return;
     const xf = clipXf(clip);
     const g = canvasGuides(cw, ch);
-    const thresh = Math.max(4, 10 / view.z);
+    const thresh = Math.max(2, 5 / view.z);
     const xs: number[] = [];
     const ys: number[] = [];
+    const show = (r: { hit: number | null; dist: number }, into: number[]) => {
+      if (r.hit != null && r.dist > 1) into.push(r.hit);
+    };
     if (d.kind === "move") {
       let left = d.left0 + (pt.x - d.px);
       let top = d.top0 + (pt.y - d.py);
@@ -298,23 +301,23 @@ export function Preview() {
       const scy = snapTo(top + d.h / 2, g.ys, thresh);
       if (sl.hit != null) {
         left = sl.v;
-        xs.push(sl.hit);
+        show(sl, xs);
       } else if (sr.hit != null) {
         left = sr.v - d.w;
-        xs.push(sr.hit);
+        show(sr, xs);
       } else if (scx.hit != null) {
         left = scx.v - d.w / 2;
-        xs.push(scx.hit);
+        show(scx, xs);
       }
       if (st.hit != null) {
         top = st.v;
-        ys.push(st.hit);
+        show(st, ys);
       } else if (sb.hit != null) {
         top = sb.v - d.h;
-        ys.push(sb.hit);
+        show(sb, ys);
       } else if (scy.hit != null) {
         top = scy.v - d.h / 2;
-        ys.push(scy.hit);
+        show(scy, ys);
       }
       setGuides({ xs, ys });
       useEditor.getState().liveTransform(d.id, {
@@ -330,11 +333,11 @@ export function Preview() {
       const sy = snapTo(my, g.ys, thresh);
       if (sx.hit != null) {
         mx = sx.v;
-        xs.push(sx.hit);
+        show(sx, xs);
       }
       if (sy.hit != null) {
         my = sy.v;
-        ys.push(sy.hit);
+        show(sy, ys);
       }
       let w = Math.max(4, Math.abs(mx - d.ax));
       let h = Math.max(4, Math.abs(my - d.ay));
@@ -350,10 +353,10 @@ export function Preview() {
       const er = snapTo(left + w, g.xs, thresh);
       const et = snapTo(top, g.ys, thresh);
       const eb = snapTo(top + h, g.ys, thresh);
-      if (el.hit != null) xs.push(el.hit);
-      if (er.hit != null) xs.push(er.hit);
-      if (et.hit != null) ys.push(et.hit);
-      if (eb.hit != null) ys.push(eb.hit);
+      show(el, xs);
+      show(er, xs);
+      show(et, ys);
+      show(eb, ys);
       setGuides({ xs, ys });
       useEditor.getState().liveTransform(
         d.id,
@@ -377,7 +380,7 @@ export function Preview() {
         d.typed = "";
         setRotTyped(false);
       }
-      const rotation = snapRotation(raw, 6);
+      const rotation = snapRotation(raw, 3);
       setRotHud(rotation);
       setRotTyped(false);
       useEditor.getState().liveTransform(d.id, { ...xf, rotation });
