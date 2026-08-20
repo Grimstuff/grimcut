@@ -97,6 +97,7 @@ type EditorState = {
   setRange: (r: (TimeRange & { kind: ClipKind }) | null) => void;
   copyRange: () => void;
   liftRange: () => void;
+  cutOrSlice: () => void;
   paste: (kind?: ClipKind) => void;
   setZoom: (z: number, anchorTime?: number) => void;
   setViewStart: (t: number) => void;
@@ -538,6 +539,15 @@ export const useEditor = create<EditorState>((set, get) => ({
       return;
     }
     set({ clipboard: chunk, status: `Copied ${chunk.kind} ${formatTime(chunk.sourceEnd - chunk.sourceStart)}` });
+  },
+
+  cutOrSlice: () => {
+    const range = get().range;
+    if (range && Math.abs(range.end - range.start) > 0.04) {
+      get().liftRange();
+      return;
+    }
+    get().slice();
   },
 
   liftRange: () => {

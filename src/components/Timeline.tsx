@@ -271,8 +271,13 @@ export function Timeline() {
         className={`lane lane-${kind}`}
         onPointerDown={(e) => startBox(kind, e)}
         onDoubleClick={(e) => {
-          const t = timeAt(e.clientX);
-          useEditor.getState().slice(t);
+          e.preventDefault();
+          e.stopPropagation();
+          drag = null;
+          applyLock(null);
+          const st = useEditor.getState();
+          st.setRange(null);
+          st.slice();
         }}
       >
         <div className="lane-label">{kind === "video" ? "V" : "A"}</div>

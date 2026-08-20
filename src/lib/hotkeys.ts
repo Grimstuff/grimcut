@@ -39,7 +39,7 @@ function onKey(e: KeyboardEvent) {
   }
   if (e.ctrlKey && e.code === "KeyX") {
     e.preventDefault();
-    st.liftRange();
+    st.cutOrSlice();
   }
   if (e.ctrlKey && e.code === "KeyZ") {
     e.preventDefault();

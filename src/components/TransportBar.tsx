@@ -161,6 +161,9 @@ export function TransportBar() {
   const rangeDur = range ? Math.abs(range.end - range.start) : 0;
   const selected = project.clips.find((c) => c.id === selectedId);
   const canCut = rangeDur > 0.04;
+  const onClip = project.clips.some(
+    (c) => playhead > c.timelineStart && playhead < c.timelineStart + (c.sourceEnd - c.sourceStart),
+  );
   const canDel = !!selected || canCut;
   const muted = volume <= 0.001;
 
@@ -335,9 +338,9 @@ export function TransportBar() {
           <button
             type="button"
             className="icon-btn"
-            title="Cut selected range (Ctrl+X)"
-            disabled={!canCut}
-            onClick={() => useEditor.getState().liftRange()}
+            title={canCut ? "Cut selected range (Ctrl+X)" : "Slice at playhead (Ctrl+X / S)"}
+            disabled={!canCut && !onClip}
+            onClick={() => useEditor.getState().cutOrSlice()}
           >
             <IconCut />
           </button>

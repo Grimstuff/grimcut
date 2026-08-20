@@ -652,6 +652,11 @@ html.is-live-resize body {
   cursor: pointer;
 }
 
+.icon-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
 .icon-btn:hover:not(:disabled) {
   background: var(--gp-tab-hover);
   color: var(--gp-text);
@@ -670,6 +675,11 @@ html.is-live-resize body {
 .icon-btn-lg {
   width: 36px;
   height: 36px;
+}
+
+.icon-btn-lg svg {
+  width: 22px;
+  height: 22px;
 }
 
 .icon-btn.is-record:disabled {
