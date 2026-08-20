@@ -95,54 +95,53 @@ function tick(now: number) {
   }
 
   const end = Math.max(timelineDuration(p), 0.01);
-  const mapped = mapTimelineToSource(p, st.playhead);
+  let ph = st.playhead;
+  let mapped = mapTimelineToSource(p, ph);
 
-  if (st.playhead >= end - 0.0005) {
+  if (mapped && v && lastClipId === mapped.clip.id && !fileSeeking && !v.paused) {
+    const src = v.currentTime;
+    const inClip = src >= mapped.clip.sourceStart - 0.08 && src < mapped.clip.sourceEnd - 0.02;
+    if (inClip) {
+      lastWall = now;
+      const local = mapped.clip.timelineStart + (src - mapped.clip.sourceStart);
+      ph = Math.max(mapped.clip.timelineStart, Math.min(clipEnd(mapped.clip) - 0.0005, local));
+      useEditor.setState({ playhead: ph, showBlack: false, selectedId: mapped.clip.id });
+      return;
+    }
+    // File ran off the end of this timeline clip — jump to the next timeline beat, not the next source frame.
+    ph = clipEnd(mapped.clip);
+    lastClipId = null;
+  } else if (!mapped) {
+    const dt = lastWall ? Math.min(0.08, (now - lastWall) / 1000) : 0;
+    lastWall = now;
+    ph = Math.min(end, ph + dt);
+  } else {
+    lastWall = now;
+  }
+
+  if (ph >= end - 0.0005) {
     useEditor.setState({ playhead: end, showBlack: true, playing: false });
     lastWall = 0;
     v?.pause();
     return;
   }
 
+  mapped = mapTimelineToSource(p, ph);
   if (!mapped) {
-    const dt = lastWall ? Math.min(0.08, (now - lastWall) / 1000) : 0;
-    lastWall = now;
     lastClipId = null;
-    const ph = Math.min(end, st.playhead + dt);
     useEditor.setState({ playhead: ph, showBlack: true });
     if (v && !v.paused) v.pause();
     return;
   }
 
-  if (v && !fileSeeking && !v.paused) {
-    lastWall = now;
-    const src = v.currentTime;
-    const clip = mapped.clip.id === lastClipId || !lastClipId
-      ? mapped.clip
-      : (p.clips.find((c) => c.id === lastClipId) ?? mapped.clip);
-    lastClipId = clip.id;
-    const clipFinish = clipEnd(clip);
-    if (src >= clip.sourceEnd - 0.02) {
-      lastClipId = null;
-      useEditor.setState({ playhead: Math.min(end, clipFinish + 0.001), showBlack: false, selectedId: clip.id });
-      return;
-    }
-    const ph = clip.timelineStart + (src - clip.sourceStart);
-    useEditor.setState({
-      playhead: Math.max(clip.timelineStart, Math.min(clipFinish, ph)),
-      showBlack: false,
-      selectedId: clip.id,
-    });
-    return;
-  }
-
-  // In a clip but the file isn't rolling yet — keep the bar still and start/resume the video.
-  lastWall = now;
-  useEditor.setState({ showBlack: false, selectedId: mapped.clip.id });
+  useEditor.setState({ playhead: ph, showBlack: false, selectedId: mapped.clip.id });
   if (!v) return;
+
   if (lastClipId !== mapped.clip.id) {
     lastClipId = mapped.clip.id;
     seekIfNeeded(v, mapped.source);
+    playVideo(v, false);
+    return;
   }
   if (v.paused && !fileSeeking) playVideo(v, false);
 }

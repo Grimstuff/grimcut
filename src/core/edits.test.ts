@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fromMedia, flattenKind, timelineDuration } from "./project";
+import { fromMedia, flattenKind, mapTimelineToSource, timelineDuration } from "./project";
 import { tryDelete, tryLiftRange, trySlice, tryToggleLink } from "./edits";
 import type { MediaInfo } from "./types";
 
@@ -48,20 +48,28 @@ describe("timeline model", () => {
     expect(r.clips.every((c) => c.linkGroup === null)).toBe(true);
   });
 
-  it("flatten uses overlay over base", () => {
+  it("flatten uses overlay over base, then the clip underneath", () => {
     const p = fromMedia(info);
     p.clips.push({
       id: "over",
       kind: "video",
       layer: "over",
-      timelineStart: 2,
-      sourceStart: 8,
-      sourceEnd: 10,
+      timelineStart: 4,
+      sourceStart: 7,
+      sourceEnd: 9,
       linkGroup: null,
     });
-    const flat = flattenKind(p, "video");
-    expect(flat.length).toBeGreaterThanOrEqual(2);
-    expect(flat.some((r) => !r.gap && r.sourceStart >= 7.9)).toBe(true);
+    const atOverlay = mapTimelineToSource(p, 5);
+    expect(atOverlay?.clip.layer).toBe("over");
+    expect(atOverlay?.source).toBeCloseTo(8);
+    const under = mapTimelineToSource(p, 6);
+    expect(under?.clip.layer).toBe("base");
+    expect(under?.source).toBeCloseTo(6);
+
+    const flat = flattenKind(p, "video").filter((s) => !s.gap);
+    expect(flat[0]).toMatchObject({ sourceStart: 0, sourceEnd: 4 });
+    expect(flat[1]).toMatchObject({ sourceStart: 7, sourceEnd: 9 });
+    expect(flat[2]).toMatchObject({ sourceStart: 6, sourceEnd: 10 });
   });
 
   it("lift range punches a hole and keeps sides", () => {

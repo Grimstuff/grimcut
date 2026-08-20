@@ -400,6 +400,14 @@ export const useEditor = create<EditorState>((set, get) => ({
       return;
     }
     applyClips(get, set, r.clips, "Paste");
+    const added = r.clips.find((c) => !p.clips.some((old) => old.id === c.id));
+    set({
+      selectedId: added?.id ?? get().selectedId,
+      status:
+        added?.layer === "over"
+          ? "Pasted as overlay (on top where it overlaps) — Ctrl+Z to undo"
+          : "Paste",
+    });
   },
 
   setZoom: (z, anchorTime) => {
