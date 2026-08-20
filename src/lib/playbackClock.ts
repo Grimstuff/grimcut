@@ -45,6 +45,28 @@ function pauseAll() {
   overlayEl?.pause();
 }
 
+function rewindToStart(p: VideoProject) {
+  lastWall = 0;
+  lastClipId = null;
+  covering = false;
+  fileSeeking = false;
+  seekTarget = null;
+  minPh = 0;
+  destClipId = null;
+  pauseAll();
+  const mappedSrc = useEditor.getState().setPlayhead(0);
+  useEditor.setState({ playing: false, previewOver: false });
+  const mapped = mapTimelineToSource(p, 0);
+  const v = mapped ? videoFor(p, mapped.clip) : videoEl;
+  if (v && mappedSrc != null) {
+    try {
+      v.currentTime = mappedSrc;
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function useLane(v: HTMLVideoElement | null) {
   activeEl = v;
   useEditor.setState({ previewOver: v != null && overlayEl != null && v === overlayEl });
@@ -267,10 +289,7 @@ function tick(now: number) {
   }
 
   if (ph >= end - 0.0005) {
-    useEditor.setState({ playhead: end, showBlack: true, playing: false });
-    lastWall = 0;
-    covering = false;
-    pauseAll();
+    rewindToStart(p);
     return;
   }
 
