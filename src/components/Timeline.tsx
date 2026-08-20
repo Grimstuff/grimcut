@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { clipDuration, formatTime, type Clip, type ClipKind } from "../core/types";
 import { clipsOn, rulerDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
@@ -37,6 +37,7 @@ type ListenWin = Window & {
 let drag: Drag | null = null;
 let lastClickAt = 0;
 let lastClickX = 0;
+let pendingScrollLeft: number | null = null;
 let scrollerEl: HTMLDivElement | null = null;
 let trackWNow = 800;
 let applyLock: (v: { pps: number; total: number } | null) => void = () => {};
@@ -183,6 +184,7 @@ export function Timeline() {
   const peaksByPath = useEditor((s) => s.peaksByPath);
   const mediaByPath = useEditor((s) => s.mediaByPath);
   const dropGhost = useEditor((s) => s.dropGhost);
+  const playing = useEditor((s) => s.playing);
   const [tlH, setTlH] = useState(192);
   const splitDrag = useRef<{ y: number; h: number } | null>(null);
 
@@ -217,18 +219,30 @@ export function Timeline() {
     if (!el) return;
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
-      const t = timeAt(e.clientX);
       const vertical = Math.abs(e.deltaY) >= Math.abs(e.deltaX);
-      if (vertical) {
-        const factor = e.deltaY > 0 ? 0.82 : 1.22;
-        useEditor.getState().setZoom(useEditor.getState().zoom * factor, t);
-      } else {
+      if (!vertical) {
         el.scrollLeft += e.deltaX;
+        return;
       }
+      const t = timeAt(e.clientX);
+      const xInView = e.clientX - el.getBoundingClientRect().left;
+      const factor = e.deltaY > 0 ? 0.82 : 1.22;
+      const st = useEditor.getState();
+      const nextZ = Math.max(1, Math.min(256, st.zoom * factor));
+      const newPps = (trackWNow / Math.max(metrics.total, 0.1)) * nextZ;
+      pendingScrollLeft = Math.max(0, t * newPps + GUTTER - xInView);
+      st.setZoom(nextZ, t);
     };
     el.addEventListener("wheel", wheel, { passive: false });
     return () => el.removeEventListener("wheel", wheel);
   }, [project]);
+
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el || pendingScrollLeft == null) return;
+    el.scrollLeft = pendingScrollLeft;
+    pendingScrollLeft = null;
+  });
 
   useEffect(() => {
     const el = scroller.current;
@@ -237,11 +251,12 @@ export function Timeline() {
       el.scrollLeft = 0;
       return;
     }
-    const x = playhead * pps + GUTTER;
+    if (!playing) return;
+    const x = playhead * metrics.pps + GUTTER;
     const pad = 48;
     if (x < el.scrollLeft + pad) el.scrollLeft = Math.max(0, x - pad);
     else if (x > el.scrollLeft + el.clientWidth - pad) el.scrollLeft = x - el.clientWidth + pad;
-  }, [playhead, pps, project, fitted]);
+  }, [playhead, project, fitted, playing]);
 
   if (!project) return null;
 
