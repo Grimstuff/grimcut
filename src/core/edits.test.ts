@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fromMedia, flattenCanvas, flattenKind, mapTimelineToSource, timelineDuration } from "./project";
-import { tryAddOverlayFromMedia, tryDelete, tryLiftRange, tryMove, trySlice, tryToggleLink } from "./edits";
+import { tryAddOverlayFromMedia, tryDelete, tryLiftRange, tryMove, trySlice, tryToggleLink, tryTrim } from "./edits";
 import type { MediaInfo } from "./types";
 
 const info: MediaInfo = {
@@ -108,6 +108,13 @@ describe("timeline model", () => {
     const me = moved.clips.find((c) => c.id === left.id) ?? moved.clips.find((c) => c.kind === "video" && c.layer === "over");
     expect(me?.layer).toBe("over");
     expect(moved.clips.filter((c) => c.kind === "video" && c.layer === "base").length).toBeGreaterThan(0);
+    const over = moved.clips.find((c) => c.kind === "video" && c.layer === "over")!;
+    const p3 = { ...p2, clips: moved.clips };
+    const tucked = tryTrim(p3, over.id, "right", over.sourceStart + 0.4);
+    expect(tucked.ok).toBe(true);
+    if (!tucked.ok) return;
+    const after = tucked.clips.find((c) => c.id === over.id) ?? tucked.clips.find((c) => c.kind === "video" && Math.abs(c.timelineStart - over.timelineStart) < 0.01);
+    expect(after?.layer).toBe("base");
   });
 
   it("flatten uses overlay over base, then the clip underneath", () => {

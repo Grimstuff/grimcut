@@ -212,6 +212,13 @@ export function resolveOccupancy(p: VideoProject, placedIds: Set<string>): EditR
     if (!placedIds.has(me.id) || me.layer !== "over") continue;
     next = punchLayer(next, me.kind, "over", me.timelineStart, clipEnd(me), placedIds);
   }
+  for (const me of next) {
+    if (me.layer !== "over") continue;
+    const start = me.timelineStart;
+    const end = clipEnd(me);
+    const covering = next.some((c) => c.id !== me.id && c.kind === me.kind && rangeOverlaps(c, start, end));
+    if (!covering) me.layer = "base";
+  }
   if (next.filter((c) => c.kind === "video").length === 0) {
     return { ok: false, error: "That would remove all video." };
   }
