@@ -35,6 +35,8 @@ type ListenWin = Window & {
 };
 
 let drag: Drag | null = null;
+let lastClickAt = 0;
+let lastClickX = 0;
 let scrollerEl: HTMLDivElement | null = null;
 let trackWNow = 800;
 let applyLock: (v: { pps: number; total: number } | null) => void = () => {};
@@ -133,6 +135,15 @@ function ensureDragListeners() {
   window.addEventListener("pointerup", up, true);
   window.addEventListener("mouseup", up, true);
   window.addEventListener("pointercancel", up, true);
+}
+
+function isRapidSecondClick(e: { clientX: number; button: number; detail?: number }) {
+  if (e.button !== 0) return false;
+  const now = performance.now();
+  const second = now - lastClickAt < 450 && Math.abs(e.clientX - lastClickX) < 14;
+  lastClickAt = now;
+  lastClickX = e.clientX;
+  return second || (e.detail ?? 0) >= 2;
 }
 
 function armDrag(e: PointerEvent, next: Drag, lock?: { pps: number; total: number }) {
@@ -250,7 +261,7 @@ export function Timeline() {
       return;
     }
     if (e.button !== 0) return;
-    if (e.detail >= 2) {
+    if (isRapidSecondClick(e)) {
       sliceAtClick(e);
       return;
     }
@@ -402,7 +413,7 @@ export function Timeline() {
           style={{ left: playhead * pps + GUTTER }}
           onPointerDown={(e) => {
             if (e.button !== 0) return;
-            if (e.detail >= 2) {
+            if (isRapidSecondClick(e)) {
               sliceAtClick(e);
               return;
             }

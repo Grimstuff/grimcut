@@ -939,9 +939,9 @@ html.is-live-resize body {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 14px;
-  transform: translateX(-6px);
-  cursor: ew-resize;
+  width: 10px;
+  transform: translateX(-4px);
+  cursor: inherit;
   z-index: 9;
 }
 
