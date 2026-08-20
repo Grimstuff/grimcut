@@ -343,23 +343,26 @@ html.is-live-resize body {
   top: 0;
   pointer-events: none;
   z-index: 6;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.canvas-guides.is-on {
+  opacity: 1;
 }
 
 .snap-dot {
   position: absolute;
   pointer-events: none;
   border-radius: 50%;
-  background: #ff5e8a;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  background: rgba(255, 94, 138, 0.55);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
   transform: translate(-50%, -50%);
-  opacity: 0;
-  animation: snap-fade-in 0.1s ease forwards;
 }
 
-@keyframes snap-fade-in {
-  to {
-    opacity: 0.95;
-  }
+.snap-dot.is-hot {
+  background: #ff5e8a;
+  box-shadow: 0 0 0 2px rgba(255, 94, 138, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
 
 .rot-ghost {

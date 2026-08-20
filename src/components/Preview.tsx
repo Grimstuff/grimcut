@@ -63,7 +63,8 @@ export function Preview() {
   const overRef = useRef<HTMLVideoElement>(null);
   const drag = useRef<CanvasDrag | null>(null);
   const [view, setView] = useState({ z: 1, x: 0, y: 0 });
-  const [snapDots, setSnapDots] = useState<{ x: number; y: number }[]>([]);
+  const [marksOn, setMarksOn] = useState(false);
+  const [hotDot, setHotDot] = useState<{ x: number; y: number } | null>(null);
   const [rotHud, setRotHud] = useState<number | null>(null);
   const [rotTyped, setRotTyped] = useState(false);
   const previewUrl = useEditor((s) => s.previewUrl);
@@ -247,6 +248,7 @@ export function Preview() {
         rot: rect.rotation,
         before: snapshotClips(),
       };
+      setMarksOn(true);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
@@ -265,6 +267,7 @@ export function Preview() {
         py: pt.y,
         before: snapshotClips(),
       };
+      setMarksOn(true);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
@@ -303,8 +306,8 @@ export function Preview() {
       if (best) {
         left += best.dx;
         top += best.dy;
-        setSnapDots(best.dist > 1 ? [{ x: best.tx, y: best.ty }] : []);
-      } else setSnapDots([]);
+        setHotDot({ x: best.tx, y: best.ty });
+      } else setHotDot(null);
       useEditor.getState().liveTransform(d.id, {
         ...xf,
         x: left + d.w / 2 - cw / 2,
@@ -318,8 +321,8 @@ export function Preview() {
       if (hit) {
         mx = hit.x;
         my = hit.y;
-        setSnapDots(hit.dist > 1 ? [{ x: hit.x, y: hit.y }] : []);
-      } else setSnapDots([]);
+        setHotDot({ x: hit.x, y: hit.y });
+      } else setHotDot(null);
       let w = Math.max(4, Math.abs(mx - d.ax));
       let h = Math.max(4, Math.abs(my - d.ay));
       const free = e.shiftKey;
@@ -362,7 +365,8 @@ export function Preview() {
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    setSnapDots([]);
+    setMarksOn(false);
+    setHotDot(null);
     setRotHud(null);
     setRotTyped(false);
     if (d && d.kind !== "pan") useEditor.getState().commit(d.before, "Transform");
@@ -426,19 +430,18 @@ export function Preview() {
               style={placeVideo(overClip)}
             />
           </div>
-            <div className="canvas-guides" style={{ width: cw, height: ch }}>
-              {snapDots.map((p) => (
-                <div
-                  key={`${p.x},${p.y}`}
-                  className="snap-dot"
-                  style={{
-                    left: p.x,
-                    top: p.y,
-                    width: Math.max(8, 8 / view.z),
-                    height: Math.max(8, 8 / view.z),
-                  }}
-                />
-              ))}
+            <div className={`canvas-guides${marksOn ? " is-on" : ""}`} style={{ width: cw, height: ch }}>
+              {canvasSnapPoints(cw, ch).map((p) => {
+                const hot = hotDot && Math.abs(hotDot.x - p.x) < 0.5 && Math.abs(hotDot.y - p.y) < 0.5;
+                const s = Math.max(7, 7 / view.z);
+                return (
+                  <div
+                    key={`${p.x},${p.y}`}
+                    className={`snap-dot${hot ? " is-hot" : ""}`}
+                    style={{ left: p.x, top: p.y, width: s, height: s }}
+                  />
+                );
+              })}
             </div>
             {bbox ? (
               <div

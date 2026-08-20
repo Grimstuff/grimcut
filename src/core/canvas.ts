@@ -112,11 +112,12 @@ export function clipDrawRect(
 
 export function canvasGuides(cw: number, ch: number) {
   return {
-    xs: [0, cw / 3, cw / 2, (2 * cw) / 3, cw],
-    ys: [0, ch / 3, ch / 2, (2 * ch) / 3, ch],
+    xs: [cw / 3, cw / 2, (2 * cw) / 3],
+    ys: [ch / 3, ch / 2, (2 * ch) / 3],
   };
 }
 
+/** Thirds × center intersections only — not frame corners or edges. */
 export function canvasSnapPoints(cw: number, ch: number): { x: number; y: number }[] {
   const { xs, ys } = canvasGuides(cw, ch);
   const pts: { x: number; y: number }[] = [];
