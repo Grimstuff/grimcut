@@ -11,6 +11,7 @@ import {
   isTimelineGap,
   mapTimelineToSource,
   rulerDuration,
+  snapEdge,
   snapStart,
   timelineDuration,
 } from "../core/project";
@@ -455,8 +456,17 @@ export const useEditor = create<EditorState>((set, get) => ({
     const p = get().project;
     if (!p) return;
     const src = { ...p, clips: from ?? p.clips };
+    const clip = src.clips.find((c) => c.id === id);
+    if (!clip) return;
     const kfs = get().media?.keyframeTimes ?? [];
-    const snapped = snapToKeyframe(sourceEdge, kfs, snapSec);
+    let snapped = snapToKeyframe(sourceEdge, kfs, snapSec);
+    const ignore = new Set<string>([id]);
+    if (clip.linkGroup) {
+      for (const c of src.clips) if (c.linkGroup === clip.linkGroup) ignore.add(c.id);
+    }
+    const t = clip.timelineStart + (snapped - clip.sourceStart);
+    const t2 = snapEdge(src, ignore, t, snapSec);
+    snapped = clip.sourceStart + (t2 - clip.timelineStart);
     const r = tryTrim(src, id, edge, snapped);
     if (r.ok) set({ project: { ...p, clips: r.clips } });
   },

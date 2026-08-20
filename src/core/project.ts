@@ -182,6 +182,27 @@ export function snapStart(
   return best;
 }
 
+/** Snap a timeline edge to 0 or other clip starts/ends if within threshold. */
+export function snapEdge(p: VideoProject, ignoreIds: Set<string>, proposed: number, threshold = SNAP): number {
+  let best = Math.max(0, proposed);
+  let bestDist = threshold;
+  const consider = (c: number) => {
+    const v = Math.max(0, c);
+    const d = Math.abs(v - proposed);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = v;
+    }
+  };
+  consider(0);
+  for (const other of p.clips) {
+    if (ignoreIds.has(other.id)) continue;
+    consider(other.timelineStart);
+    consider(clipEnd(other));
+  }
+  return best;
+}
+
 export type FlatSeg =
   | { gap: false; sourceStart: number; sourceEnd: number; sourcePath: string }
   | { gap: true; duration: number };
