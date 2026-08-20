@@ -246,9 +246,6 @@ export function TransportBar() {
             </div>
           ) : null}
         </div>
-      </div>
-
-      <div className="tl-bar-center">
         <div className="tb-group" title="Preview volume">
           <button
             type="button"
@@ -283,6 +280,9 @@ export function TransportBar() {
             }}
           />
         </div>
+      </div>
+
+      <div className="tl-bar-center">
         <div className="tb-group">
           <button
             type="button"

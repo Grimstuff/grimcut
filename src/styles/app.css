@@ -473,6 +473,7 @@ html.is-live-resize body {
 .tl-bar-center {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
 }
 
