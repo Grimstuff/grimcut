@@ -71,6 +71,7 @@ type EditorState = {
   setZoom: (z: number, anchorTime?: number) => void;
   setViewStart: (t: number) => void;
   setPlaying: (v: boolean) => void;
+  togglePlay: () => void;
   setMenuOpen: (v: boolean) => void;
   setProgress: (p: { label: string; pct: number } | null) => void;
   exportVideo: () => Promise<void>;
@@ -116,6 +117,19 @@ export const useEditor = create<EditorState>((set, get) => ({
   progress: null,
 
   setPlaying: (v) => set({ playing: v }),
+  togglePlay: () => {
+    const st = get();
+    if (st.menuOpen) {
+      set({ menuOpen: false });
+      return;
+    }
+    if (!st.project) return;
+    if (st.playing) {
+      set({ playing: false });
+      return;
+    }
+    set({ playing: true });
+  },
   setMenuOpen: (v) => set({ menuOpen: v }),
   setProgress: (p) => set({ progress: p, busy: p != null }),
 
@@ -362,12 +376,13 @@ export const useEditor = create<EditorState>((set, get) => ({
       return;
     }
     applyClips(get, set, r.clips, "Cut range");
+    const dur = range.end - range.start;
     set({
       clipboard: chunk,
       range: null,
       status: chunk
-        ? `Cut ${chunk.kind} ${formatTime(chunk.sourceEnd - chunk.sourceStart)} — Ctrl+V to place`
-        : "Cut range",
+        ? `Cut ${formatTime(dur)} hole — Ctrl+V pastes at playhead`
+        : `Cut ${formatTime(dur)} hole`,
     });
   },
 

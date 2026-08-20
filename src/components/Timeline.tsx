@@ -1,19 +1,20 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { clipDuration, formatTime, type Clip, type ClipKind } from "../core/types";
 import { clipsOn, rulerDuration, timelineDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
 import { Waveform } from "./Waveform";
 
 type Drag =
-  | { kind: "seek" }
+  | { kind: "seek"; pps: number; total: number }
   | { kind: "pan"; startX: number; view0: number }
-  | { kind: "box"; track: ClipKind; a: number; b: number }
+  | { kind: "box"; track: ClipKind; a: number; b: number; pps: number; total: number }
   | {
       kind: "move" | "trimL" | "trimR";
       id: string;
       startX: number;
       orig: number;
       before: Clip[];
+      pps: number;
     };
 
 function seekVideo(t: number) {
@@ -29,6 +30,9 @@ export function Timeline() {
   const scroller = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const [trackW, setTrackW] = useState(800);
+  const trackWRef = useRef(trackW);
+  trackWRef.current = trackW;
+  const [lock, setLock] = useState<{ pps: number; total: number } | null>(null);
 
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
@@ -54,16 +58,21 @@ export function Timeline() {
   }, [project]);
 
   const total = Math.max(project ? rulerDuration(project) : 1, 0.1);
-  const fitted = zoom <= 1.001;
-  const fitPps = trackW / total;
-  const pps = fitPps * zoom;
-  const width = fitted ? trackW : Math.ceil(total * pps);
+  const livePps = (trackW / total) * zoom;
+  const pps = lock?.pps ?? livePps;
+  const layoutTotal = lock ? Math.max(lock.total, total) : total;
+  const fitted = zoom <= 1.001 && !lock;
+  const width = fitted ? trackW : Math.ceil(layoutTotal * pps);
 
-  const timeAt = (clientX: number) => {
+  const metrics = useRef({ pps, total });
+  metrics.current = { pps, total };
+
+  const timeAt = (clientX: number, frozen?: { pps: number; total: number }) => {
     const el = scroller.current;
     if (!el) return 0;
+    const m = frozen ?? metrics.current;
     const x = clientX - el.getBoundingClientRect().left + el.scrollLeft - GUTTER;
-    return Math.max(0, Math.min(total, x / pps));
+    return Math.max(0, Math.min(m.total, x / m.pps));
   };
 
   useEffect(() => {
@@ -81,25 +90,67 @@ export function Timeline() {
       }
     };
     el.addEventListener("wheel", wheel, { passive: false });
+    return () => el.removeEventListener("wheel", wheel);
+  }, [project]);
+
+  useEffect(() => {
+    const onMove = (e: globalThis.PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      if (d.kind === "seek") {
+        seekVideo(timeAt(e.clientX, d));
+        return;
+      }
+      if (d.kind === "box") {
+        const t = timeAt(e.clientX, d);
+        drag.current = { ...d, b: t };
+        useEditor.getState().setRange({ start: Math.min(d.a, t), end: Math.max(d.a, t), kind: d.track });
+        return;
+      }
+      if (d.kind === "pan" && scroller.current) {
+        scroller.current.scrollLeft = d.view0 - (e.clientX - d.startX);
+        return;
+      }
+      if (d.kind !== "move" && d.kind !== "trimL" && d.kind !== "trimR") return;
+      const delta = (e.clientX - d.startX) / d.pps;
+      const snapSec = Math.min(0.25, Math.max(0.05, 10 / d.pps));
+      const st = useEditor.getState();
+      if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta, snapSec);
+      if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta, snapSec);
+      if (d.kind === "move") st.liveMove(d.id, d.orig + delta, snapSec);
+    };
     const onUp = () => {
       const d = drag.current;
       if (!d) return;
+      const st = useEditor.getState();
       if (d.kind === "move" || d.kind === "trimL" || d.kind === "trimR") {
-        useEditor.getState().commit(d.before, d.kind === "move" ? "Move" : "Trim");
+        st.commit(d.before, d.kind === "move" ? "Move" : "Trim");
+        const p = st.project;
+        if (p) {
+          const newTotal = Math.max(rulerDuration(p), 0.1);
+          const z = (d.pps * newTotal) / trackWRef.current;
+          if (z > 1.02 && Math.abs(z - st.zoom) > 0.02) {
+            useEditor.setState({ zoom: z });
+          }
+        }
       }
       if (d.kind === "box") {
         const a = Math.min(d.a, d.b);
         const b = Math.max(d.a, d.b);
-        useEditor.getState().setRange(b - a > 0.04 ? { start: a, end: b, kind: d.track } : null);
+        st.setRange(b - a > 0.04 ? { start: a, end: b, kind: d.track } : null);
       }
       drag.current = null;
+      setLock(null);
     };
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
-      el.removeEventListener("wheel", wheel);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
-  }, [project, pps, total]);
+  }, []);
 
   useEffect(() => {
     const el = scroller.current;
@@ -116,52 +167,32 @@ export function Timeline() {
 
   if (!project) return null;
 
-  const onMove = (e: MouseEvent) => {
-    const d = drag.current;
-    if (!d) return;
-    const t = timeAt(e.clientX);
-    if (d.kind === "seek") {
-      seekVideo(t);
-      return;
-    }
-    if (d.kind === "box") {
-      drag.current = { ...d, b: t };
-      useEditor.getState().setRange({ start: Math.min(d.a, t), end: Math.max(d.a, t), kind: d.track });
-      return;
-    }
-    if (d.kind === "pan" && scroller.current) {
-      scroller.current.scrollLeft = d.view0 - (e.clientX - d.startX);
-      return;
-    }
-    const delta = (e.clientX - d.startX) / pps;
-    const snapSec = Math.min(0.25, Math.max(0.05, 10 / pps));
-    const st = useEditor.getState();
-    if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta, snapSec);
-    if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta, snapSec);
-    if (d.kind === "move") st.liveMove(d.id, d.orig + delta, snapSec);
-  };
-
-  const startBox = (kind: ClipKind, e: MouseEvent) => {
+  const startBox = (kind: ClipKind, e: PointerEvent) => {
     if ((e.target as HTMLElement).closest(".handle, .clip-grip, .playhead-hit, .link-btn")) return;
     if (e.button === 1) {
       drag.current = { kind: "pan", startX: e.clientX, view0: scroller.current?.scrollLeft ?? 0 };
       return;
     }
+    if (e.button !== 0) return;
     const t = timeAt(e.clientX);
-    drag.current = { kind: "box", track: kind, a: t, b: t };
+    drag.current = { kind: "box", track: kind, a: t, b: t, pps, total };
+    setLock({ pps, total });
     useEditor.getState().setRange({ start: t, end: t, kind });
     seekVideo(t);
   };
 
-  const startEdit = (kind: "move" | "trimL" | "trimR", clip: Clip, e: MouseEvent, orig: number) => {
+  const startEdit = (kind: "move" | "trimL" | "trimR", clip: Clip, e: PointerEvent, orig: number) => {
     e.stopPropagation();
+    if (e.button !== 0) return;
     useEditor.getState().select(clip.id);
+    setLock({ pps, total });
     drag.current = {
       kind,
       id: clip.id,
       startX: e.clientX,
       orig,
       before: useEditor.getState().snapshot() ?? [],
+      pps,
     };
   };
 
@@ -171,7 +202,7 @@ export function Timeline() {
     return (
       <div
         className={`lane lane-${kind}`}
-        onMouseDown={(e) => startBox(kind, e)}
+        onPointerDown={(e) => startBox(kind, e)}
         onDoubleClick={(e) => {
           const t = timeAt(e.clientX);
           useEditor.getState().slice(t);
@@ -215,7 +246,7 @@ export function Timeline() {
               className="range-box"
               style={{
                 left: Math.min(range.start, range.end) * pps,
-                width: Math.abs(range.end - range.start) * pps,
+                width: Math.max(2, Math.abs(range.end - range.start) * pps),
               }}
             />
           ) : null}
@@ -225,12 +256,14 @@ export function Timeline() {
   };
 
   const selected = project.clips.find((c) => c.id === selectedId);
+  const rangeDur = range ? Math.abs(range.end - range.start) : 0;
 
   return (
     <div className="timeline">
       <div className="timeline-head">
         <span>
           {formatTime(playhead)} / {formatTime(timelineDuration(project))} · {zoom <= 1.01 ? "fit" : `${zoom.toFixed(1)}×`}
+          {range && rangeDur > 0.04 ? ` · sel ${formatTime(rangeDur)}` : ""}
         </span>
         <div className="timeline-actions">
           <button type="button" title="Slice at playhead (S / double-click)" onClick={() => useEditor.getState().slice()}>
@@ -251,7 +284,7 @@ export function Timeline() {
           <button
             type="button"
             title="Cut selected range (Ctrl+X)"
-            disabled={!range}
+            disabled={rangeDur <= 0.04}
             onClick={() => useEditor.getState().liftRange()}
           >
             Cut
@@ -273,22 +306,24 @@ export function Timeline() {
           </button>
         </div>
       </div>
-      <div ref={scroller} className={`tl-scroll${fitted ? " is-fitted" : ""}`} onMouseMove={onMove}>
+      <div ref={scroller} className={`tl-scroll${fitted ? " is-fitted" : ""}`}>
         {renderLane("video")}
         {renderLane("audio")}
         <div
           className="playhead-hit"
           style={{ left: playhead * pps + GUTTER }}
-          onMouseDown={(e) => {
+          onPointerDown={(e) => {
             e.stopPropagation();
+            if (e.button !== 0) return;
             seekVideo(timeAt(e.clientX));
-            drag.current = { kind: "seek" };
+            setLock({ pps, total });
+            drag.current = { kind: "seek", pps, total };
           }}
         />
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
       </div>
       <div className="timeline-foot">
-        <span>Drag bar to select · top strip / Alt-drag to move · Ctrl+X cut range · Ctrl+V paste</span>
+        <span>Drag bar to select · box on top to move · Ctrl+X cut · Ctrl+V paste</span>
         <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>
@@ -315,10 +350,10 @@ function ClipView({
   peaks: number[];
   sourceDuration: number;
   keyframes: number[];
-  onMove: (e: MouseEvent) => void;
-  onRange: (e: MouseEvent) => void;
-  onTrimL: (e: MouseEvent) => void;
-  onTrimR: (e: MouseEvent) => void;
+  onMove: (e: PointerEvent) => void;
+  onRange: (e: PointerEvent) => void;
+  onTrimL: (e: PointerEvent) => void;
+  onTrimR: (e: PointerEvent) => void;
 }) {
   const dur = clipDuration(clip);
   const ticks: number[] = [];
@@ -338,22 +373,22 @@ function ClipView({
         left: clip.timelineStart * pps,
         width: Math.max(dur * pps, 8),
       }}
-      onMouseDown={(e) => {
+      onPointerDown={(e) => {
         e.stopPropagation();
         if (e.altKey) onMove(e);
         else onRange(e);
       }}
-      title={`${clip.kind} ${overlay ? "overlay" : "base"} — drag to select, top strip to move`}
+      title={`${clip.kind} ${overlay ? "overlay" : "base"} — drag to select, top box to move`}
     >
       <div
         className="clip-grip"
         title="Drag to move clip (or Alt+drag)"
-        onMouseDown={(e) => {
+        onPointerDown={(e) => {
           e.stopPropagation();
           onMove(e);
         }}
       />
-      <div className="handle left" onMouseDown={onTrimL} />
+      <div className="handle left" onPointerDown={onTrimL} />
       {ticks.map((x) => (
         <span key={x} className="kf-tick" style={{ left: `${x}%` }} />
       ))}
@@ -361,7 +396,7 @@ function ClipView({
         <span className="clip-label">{formatTime(dur)}</span>
       )}
       {clip.linkGroup ? <span className="link-dot" title="Linked A/V" /> : null}
-      <div className="handle right" onMouseDown={onTrimR} />
+      <div className="handle right" onPointerDown={onTrimR} />
     </div>
   );
 }
