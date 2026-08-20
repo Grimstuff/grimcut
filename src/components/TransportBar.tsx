@@ -39,6 +39,21 @@ function IconRecord() {
     </svg>
   );
 }
+function IconPaste() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M5.2 4.2h5.6v9.2H5.2zM6.4 4.2V2.8h3.2v1.4"
+      />
+      <path fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" d="M7 8.2h2M7 10.4h2.8" />
+    </svg>
+  );
+}
 function IconCut() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -125,6 +140,7 @@ export function TransportBar() {
   const selectedId = useEditor((s) => s.selectedId);
   const range = useEditor((s) => s.range);
   const busy = useEditor((s) => s.busy);
+  const clipboard = useEditor((s) => s.clipboard);
   const volume = useEditor((s) => s.previewVolume);
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [arOpen, setArOpen] = useState(false);
@@ -335,15 +351,26 @@ export function TransportBar() {
 
       <div className="tl-bar-right">
         <div className="tb-group">
-          <button
-            type="button"
-            className="icon-btn"
-            title={canCut ? "Cut selected range (Ctrl+X)" : "Slice at playhead (Ctrl+X / S)"}
-            disabled={!canCut && !onClip}
-            onClick={() => useEditor.getState().cutOrSlice()}
-          >
-            <IconCut />
-          </button>
+          {clipboard ? (
+            <button
+              type="button"
+              className="icon-btn"
+              title="Paste at playhead (Ctrl+V)"
+              onClick={() => useEditor.getState().paste()}
+            >
+              <IconPaste />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="icon-btn"
+              title={canCut ? "Cut selected range (Ctrl+X)" : "Slice at playhead (Ctrl+X / S)"}
+              disabled={!canCut && !onClip}
+              onClick={() => useEditor.getState().cutOrSlice()}
+            >
+              <IconCut />
+            </button>
+          )}
           <button
             type="button"
             className="icon-btn"

@@ -233,6 +233,16 @@ export function Timeline() {
 
   if (!project) return null;
 
+  const sliceAtClick = (e: PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    drag = null;
+    applyLock(null);
+    const st = useEditor.getState();
+    st.setRange(null);
+    st.slice();
+  };
+
   const startBox = (kind: ClipKind, e: PointerEvent) => {
     if ((e.target as HTMLElement).closest(".handle, .clip-grip, .playhead-hit, .link-btn")) return;
     if (e.button === 1) {
@@ -240,6 +250,10 @@ export function Timeline() {
       return;
     }
     if (e.button !== 0) return;
+    if (e.detail >= 2) {
+      sliceAtClick(e);
+      return;
+    }
     const t = timeAt(e.clientX);
     armDrag(e, { kind: "box", track: kind, a: t, b: t, pps, total }, { pps, total });
     useEditor.getState().setRange({ start: t, end: t, kind });
@@ -270,15 +284,6 @@ export function Timeline() {
       <div
         className={`lane lane-${kind}`}
         onPointerDown={(e) => startBox(kind, e)}
-        onDoubleClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          drag = null;
-          applyLock(null);
-          const st = useEditor.getState();
-          st.setRange(null);
-          st.slice();
-        }}
       >
         <div className="lane-label">{kind === "video" ? "V" : "A"}</div>
         <div className="lane-body" style={{ width }}>
@@ -397,6 +402,10 @@ export function Timeline() {
           style={{ left: playhead * pps + GUTTER }}
           onPointerDown={(e) => {
             if (e.button !== 0) return;
+            if (e.detail >= 2) {
+              sliceAtClick(e);
+              return;
+            }
             seekVideo(timeAt(e.clientX));
             armDrag(e, { kind: "seek", pps, total }, { pps, total });
           }}
