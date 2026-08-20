@@ -154,6 +154,68 @@ export function tryToggleLink(p: VideoProject, id: string): EditResult {
   return { ok: true, clips };
 }
 
+/** Remove [start, end) from overlapping clips (and linked partners). Leaves a hole. */
+export function tryLiftRange(
+  p: VideoProject,
+  kind: ClipKind,
+  start: number,
+  end: number,
+): EditResult {
+  const a = Math.min(start, end);
+  const b = Math.max(start, end);
+  if (b - a < MIN_CLIP) return { ok: false, error: "Selection too small." };
+
+  const hit = new Set<string>();
+  for (const c of p.clips) {
+    if (c.kind !== kind) continue;
+    if (b <= c.timelineStart || a >= clipEnd(c)) continue;
+    hit.add(c.id);
+    const mate = partner(p, c);
+    if (mate) hit.add(mate.id);
+  }
+  if (hit.size === 0) return { ok: false, error: "Nothing in that range." };
+
+  const leftGroup = new Map<string, string>();
+  const rightGroup = new Map<string, string>();
+  const next: Clip[] = [];
+  for (const c of p.clips) {
+    if (!hit.has(c.id)) {
+      next.push(cloneClip(c));
+      continue;
+    }
+    const t0 = c.timelineStart;
+    const t1 = clipEnd(c);
+    if (a > t0 + MIN_CLIP) {
+      const srcEnd = c.sourceStart + (a - t0);
+      let g = c.linkGroup;
+      if (g) {
+        if (!leftGroup.has(g)) leftGroup.set(g, g);
+        g = leftGroup.get(g)!;
+      }
+      next.push({ ...cloneClip(c), id: newId(), sourceEnd: srcEnd, linkGroup: g ?? null });
+    }
+    if (b < t1 - MIN_CLIP) {
+      const srcStart = c.sourceStart + (b - t0);
+      let g: string | null = c.linkGroup;
+      if (g) {
+        if (!rightGroup.has(g)) rightGroup.set(g, newId());
+        g = rightGroup.get(g)!;
+      }
+      next.push({
+        ...cloneClip(c),
+        id: newId(),
+        timelineStart: b,
+        sourceStart: srcStart,
+        linkGroup: g,
+      });
+    }
+  }
+  if (next.filter((c) => c.kind === "video").length === 0) {
+    return { ok: false, error: "That would remove all video." };
+  }
+  return { ok: true, clips: next };
+}
+
 export function tryPaste(
   p: VideoProject,
   chunk: ClipboardChunk,

@@ -118,6 +118,9 @@ export function AppChrome() {
           <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); del(); }}>
             Delete clip <span className="menu-shortcut">Del</span>
           </button>
+          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); useEditor.getState().liftRange(); }}>
+            Cut range <span className="menu-shortcut">Ctrl+X</span>
+          </button>
           <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); copyRange(); }}>
             Copy range <span className="menu-shortcut">Ctrl+C</span>
           </button>

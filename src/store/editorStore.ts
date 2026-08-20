@@ -17,6 +17,7 @@ import {
   UndoStack,
   chunkFromRange,
   tryDelete,
+  tryLiftRange,
   tryMove,
   tryPaste,
   trySlice,
@@ -65,6 +66,7 @@ type EditorState = {
   toggleLink: (id: string) => void;
   setRange: (r: (TimeRange & { kind: ClipKind }) | null) => void;
   copyRange: () => void;
+  liftRange: () => void;
   paste: (kind?: ClipKind) => void;
   setZoom: (z: number, anchorTime?: number) => void;
   setViewStart: (t: number) => void;
@@ -232,6 +234,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   del: () => {
+    if (get().range) {
+      get().liftRange();
+      return;
+    }
     const p = get().project;
     const id = get().selectedId;
     if (!p || !id) return;
@@ -340,6 +346,29 @@ export const useEditor = create<EditorState>((set, get) => ({
       return;
     }
     set({ clipboard: chunk, status: `Copied ${chunk.kind} ${formatTime(chunk.sourceEnd - chunk.sourceStart)}` });
+  },
+
+  liftRange: () => {
+    const p = get().project;
+    const range = get().range;
+    if (!p || !range) {
+      set({ status: "Drag a range on a bar first." });
+      return;
+    }
+    const chunk = chunkFromRange(p, range.kind, range.start, range.end);
+    const r = tryLiftRange(p, range.kind, range.start, range.end);
+    if (!r.ok) {
+      set({ status: r.error });
+      return;
+    }
+    applyClips(get, set, r.clips, "Cut range");
+    set({
+      clipboard: chunk,
+      range: null,
+      status: chunk
+        ? `Cut ${chunk.kind} ${formatTime(chunk.sourceEnd - chunk.sourceStart)} — Ctrl+V to place`
+        : "Cut range",
+    });
   },
 
   paste: (kind) => {

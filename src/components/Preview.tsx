@@ -154,7 +154,7 @@ export function Preview() {
       }
       if (e.ctrlKey && e.code === "KeyX") {
         e.preventDefault();
-        st.slice();
+        st.liftRange();
       }
       if (e.ctrlKey && e.code === "KeyZ") {
         e.preventDefault();

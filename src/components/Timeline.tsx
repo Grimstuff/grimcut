@@ -142,12 +142,11 @@ export function Timeline() {
   };
 
   const startBox = (kind: ClipKind, e: MouseEvent) => {
-    if ((e.target as HTMLElement).closest(".clip, .handle, .playhead-hit, .link-btn")) return;
-    if (e.button === 1 || e.altKey) {
+    if ((e.target as HTMLElement).closest(".handle, .clip-grip, .playhead-hit, .link-btn")) return;
+    if (e.button === 1) {
       drag.current = { kind: "pan", startX: e.clientX, view0: scroller.current?.scrollLeft ?? 0 };
       return;
     }
-    // Empty-lane drag = range box. Playhead via playhead handle or click-without-drag.
     const t = timeAt(e.clientX);
     drag.current = { kind: "box", track: kind, a: t, b: t };
     useEditor.getState().setRange({ start: t, end: t, kind });
@@ -190,6 +189,7 @@ export function Timeline() {
               sourceDuration={project.sourceDuration}
               keyframes={keyframes}
               onMove={(e) => startEdit("move", c, e, c.timelineStart)}
+              onRange={(e) => startBox(kind, e)}
               onTrimL={(e) => startEdit("trimL", c, e, c.sourceStart)}
               onTrimR={(e) => startEdit("trimR", c, e, c.sourceEnd)}
             />
@@ -205,6 +205,7 @@ export function Timeline() {
               sourceDuration={project.sourceDuration}
               keyframes={keyframes}
               onMove={(e) => startEdit("move", c, e, c.timelineStart)}
+              onRange={(e) => startBox(kind, e)}
               onTrimL={(e) => startEdit("trimL", c, e, c.sourceStart)}
               onTrimR={(e) => startEdit("trimR", c, e, c.sourceEnd)}
             />
@@ -235,7 +236,7 @@ export function Timeline() {
           <button type="button" title="Slice at playhead (S / double-click)" onClick={() => useEditor.getState().slice()}>
             Slice
           </button>
-          <button type="button" disabled={!selected} onClick={() => useEditor.getState().del()}>
+          <button type="button" disabled={!selected && !range} onClick={() => useEditor.getState().del()}>
             Delete
           </button>
           <button
@@ -246,6 +247,14 @@ export function Timeline() {
             onClick={() => selected && useEditor.getState().toggleLink(selected.id)}
           >
             {selected?.linkGroup ? "Linked" : "Unlinked"}
+          </button>
+          <button
+            type="button"
+            title="Cut selected range (Ctrl+X)"
+            disabled={!range}
+            onClick={() => useEditor.getState().liftRange()}
+          >
+            Cut
           </button>
           <button type="button" onClick={() => useEditor.getState().copyRange()}>
             Copy
@@ -279,7 +288,7 @@ export function Timeline() {
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
       </div>
       <div className="timeline-foot">
-        <span>Amber ticks = keyframes (weak snap) · trim/slice to them for lossless save</span>
+        <span>Drag bar to select · top strip / Alt-drag to move · Ctrl+X cut range · Ctrl+V paste</span>
         <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>
@@ -295,6 +304,7 @@ function ClipView({
   sourceDuration,
   keyframes,
   onMove,
+  onRange,
   onTrimL,
   onTrimR,
 }: {
@@ -306,6 +316,7 @@ function ClipView({
   sourceDuration: number;
   keyframes: number[];
   onMove: (e: MouseEvent) => void;
+  onRange: (e: MouseEvent) => void;
   onTrimL: (e: MouseEvent) => void;
   onTrimR: (e: MouseEvent) => void;
 }) {
@@ -327,9 +338,21 @@ function ClipView({
         left: clip.timelineStart * pps,
         width: Math.max(dur * pps, 8),
       }}
-      onMouseDown={onMove}
-      title={`${clip.kind} ${overlay ? "overlay" : "base"} ${formatTime(dur)}`}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        if (e.altKey) onMove(e);
+        else onRange(e);
+      }}
+      title={`${clip.kind} ${overlay ? "overlay" : "base"} — drag to select, top strip to move`}
     >
+      <div
+        className="clip-grip"
+        title="Drag to move clip (or Alt+drag)"
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          onMove(e);
+        }}
+      />
       <div className="handle left" onMouseDown={onTrimL} />
       {ticks.map((x) => (
         <span key={x} className="kf-tick" style={{ left: `${x}%` }} />
