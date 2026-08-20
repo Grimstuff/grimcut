@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fromMedia, flattenKind, mapTimelineToSource, timelineDuration } from "./project";
-import { tryAddOverlayFromMedia, tryDelete, tryLiftRange, trySlice, tryToggleLink } from "./edits";
+import { tryAddOverlayFromMedia, tryDelete, tryLiftRange, tryMove, trySlice, tryToggleLink } from "./edits";
 import type { MediaInfo } from "./types";
 
 const info: MediaInfo = {
@@ -65,6 +65,40 @@ describe("timeline model", () => {
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.clips.filter((c) => c.layer === "over" && c.kind === "video")).toHaveLength(2);
+  });
+
+  it("overlay dropped onto overlay splits the existing one", () => {
+    const p = fromMedia(info);
+    const first = tryAddOverlayFromMedia(p, { ...info, path: "C:/b.mp4", duration: 6 }, 0);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const p2 = { ...p, clips: first.clips };
+    const second = tryAddOverlayFromMedia(p2, { ...info, path: "C:/c.mp4", duration: 2, hasAudio: false }, 2);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    const overV = second.clips.filter((c) => c.kind === "video" && c.layer === "over").sort((a, b) => a.timelineStart - b.timelineStart);
+    expect(overV).toHaveLength(3);
+    expect(overV[0].sourcePath).toBe("C:/b.mp4");
+    expect(overV[0].sourceEnd).toBeCloseTo(2);
+    expect(overV[1].sourcePath).toBe("C:/c.mp4");
+    expect(overV[1].timelineStart).toBeCloseTo(2);
+    expect(overV[2].timelineStart).toBeCloseTo(4);
+    expect(overV[2].sourcePath).toBe("C:/b.mp4");
+  });
+
+  it("moving a base clip onto another base clip promotes it to overlay", () => {
+    const p = fromMedia(info);
+    const cut = trySlice(p, 4);
+    expect(cut.ok).toBe(true);
+    if (!cut.ok) return;
+    const p2 = { ...p, clips: cut.clips };
+    const left = p2.clips.find((c) => c.kind === "video" && c.timelineStart === 0)!;
+    const moved = tryMove(p2, left.id, 3);
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    const me = moved.clips.find((c) => c.id === left.id) ?? moved.clips.find((c) => c.kind === "video" && c.layer === "over");
+    expect(me?.layer).toBe("over");
+    expect(moved.clips.filter((c) => c.kind === "video" && c.layer === "base").length).toBeGreaterThan(0);
   });
 
   it("flatten uses overlay over base, then the clip underneath", () => {

@@ -113,25 +113,123 @@ export function tryTrim(
     return next;
   };
 
+  const ids = new Set<string>([id]);
+  if (clip.linkGroup) {
+    for (const c of p.clips) if (c.linkGroup === clip.linkGroup) ids.add(c.id);
+  }
   const clips = p.clips.map((c) => {
-    if (c.id === id) return apply(c);
-    if (clip.linkGroup && c.linkGroup === clip.linkGroup) return apply(c);
+    if (ids.has(c.id)) return apply(c);
     return cloneClip(c);
   });
-  return { ok: true, clips };
+  return resolveOccupancy({ ...p, clips }, ids);
+}
+
+function rangeOverlaps(c: Clip, start: number, end: number) {
+  return c.timelineStart < end && clipEnd(c) > start;
+}
+
+/** Split clips of this kind+layer around [start, end). Linked partners split with them. */
+function punchLayer(
+  clips: Clip[],
+  kind: ClipKind,
+  layer: ClipLayer,
+  start: number,
+  end: number,
+  keep: Set<string>,
+): Clip[] {
+  const a = Math.min(start, end);
+  const b = Math.max(start, end);
+  if (b - a < MIN_CLIP) return clips.map(cloneClip);
+  const hit = new Set<string>();
+  for (const c of clips) {
+    if (keep.has(c.id) || c.kind !== kind || c.layer !== layer) continue;
+    if (b <= c.timelineStart || a >= clipEnd(c)) continue;
+    hit.add(c.id);
+    if (c.linkGroup) {
+      for (const m of clips) if (m.linkGroup === c.linkGroup) hit.add(m.id);
+    }
+  }
+  if (hit.size === 0) return clips.map(cloneClip);
+  const leftGroup = new Map<string, string>();
+  const rightGroup = new Map<string, string>();
+  const next: Clip[] = [];
+  for (const c of clips) {
+    if (!hit.has(c.id)) {
+      next.push(cloneClip(c));
+      continue;
+    }
+    const t0 = c.timelineStart;
+    const t1 = clipEnd(c);
+    if (a > t0 + MIN_CLIP) {
+      let g = c.linkGroup;
+      if (g) {
+        if (!leftGroup.has(g)) leftGroup.set(g, g);
+        g = leftGroup.get(g)!;
+      }
+      next.push({ ...cloneClip(c), id: newId(), sourceEnd: c.sourceStart + (a - t0), linkGroup: g ?? null });
+    }
+    if (b < t1 - MIN_CLIP) {
+      let g: string | null = c.linkGroup;
+      if (g) {
+        if (!rightGroup.has(g)) rightGroup.set(g, newId());
+        g = rightGroup.get(g)!;
+      }
+      next.push({
+        ...cloneClip(c),
+        id: newId(),
+        timelineStart: b,
+        sourceStart: c.sourceStart + (b - t0),
+        linkGroup: g,
+      });
+    }
+  }
+  return next;
+}
+
+/**
+ * One clip per kind per layer at any time.
+ * Overlapping base → the placed clip(s) go to overlay.
+ * Overlapping overlay → punch a hole in the existing overlay and sit in it.
+ */
+export function resolveOccupancy(p: VideoProject, placedIds: Set<string>): EditResult {
+  const clips = p.clips.map(cloneClip);
+  for (const me of clips) {
+    if (!placedIds.has(me.id) || me.layer !== "base") continue;
+    const start = me.timelineStart;
+    const end = clipEnd(me);
+    const hit = clips.some(
+      (c) => !placedIds.has(c.id) && c.kind === me.kind && c.layer === "base" && rangeOverlaps(c, start, end),
+    );
+    if (!hit) continue;
+    me.layer = "over";
+    if (me.linkGroup) {
+      for (const c of clips) if (c.linkGroup === me.linkGroup) c.layer = "over";
+    }
+  }
+  let next = clips;
+  for (const me of clips) {
+    if (!placedIds.has(me.id) || me.layer !== "over") continue;
+    next = punchLayer(next, me.kind, "over", me.timelineStart, clipEnd(me), placedIds);
+  }
+  if (next.filter((c) => c.kind === "video").length === 0) {
+    return { ok: false, error: "That would remove all video." };
+  }
+  return { ok: true, clips: next };
 }
 
 export function tryMove(p: VideoProject, id: string, timelineStart: number): EditResult {
   const clip = p.clips.find((c) => c.id === id);
   if (!clip) return { ok: false, error: "No clip selected." };
+  const ids = new Set<string>([id]);
+  if (clip.linkGroup) {
+    for (const c of p.clips) if (c.linkGroup === clip.linkGroup) ids.add(c.id);
+  }
   const delta = Math.max(0, timelineStart) - clip.timelineStart;
   const clips = p.clips.map((c) => {
-    if (c.id === id || (clip.linkGroup && c.linkGroup === clip.linkGroup)) {
-      return { ...c, timelineStart: Math.max(0, c.timelineStart + delta) };
-    }
+    if (ids.has(c.id)) return { ...c, timelineStart: Math.max(0, c.timelineStart + delta) };
     return cloneClip(c);
   });
-  return { ok: true, clips };
+  return resolveOccupancy({ ...p, clips }, ids);
 }
 
 export function tryToggleLink(p: VideoProject, id: string): EditResult {
@@ -236,30 +334,18 @@ export function tryPaste(
   if (overlapBase && preferLayer === "base") layer = "over";
 
   const clips = p.clips.map(cloneClip);
-  if (layer === "over") {
-    clips.push({
-      id: newId(),
-      kind: chunk.kind,
-      layer: "over",
-      timelineStart: Math.max(0, at),
-      sourceStart: chunk.sourceStart,
-      sourceEnd: chunk.sourceEnd,
-      linkGroup: null,
-      sourcePath: chunk.sourcePath,
-    });
-    return { ok: true, clips };
-  }
+  const placed = newId();
   clips.push({
-    id: newId(),
+    id: placed,
     kind: chunk.kind,
-    layer: "base",
+    layer,
     timelineStart: Math.max(0, at),
     sourceStart: chunk.sourceStart,
     sourceEnd: chunk.sourceEnd,
     linkGroup: null,
     sourcePath: chunk.sourcePath,
   });
-  return { ok: true, clips };
+  return resolveOccupancy({ ...p, clips }, new Set([placed]));
 }
 
 export function chunkFromRange(
@@ -287,8 +373,11 @@ export function tryAddOverlayFromMedia(p: VideoProject, info: MediaInfo, at: num
   const other = info.path !== p.sourcePath ? info.path : undefined;
   const group = newId();
   const clips = p.clips.map(cloneClip);
+  const ids = new Set<string>();
+  const vid = newId();
+  ids.add(vid);
   clips.push({
-    id: newId(),
+    id: vid,
     kind: "video",
     layer: "over",
     timelineStart: start,
@@ -298,8 +387,10 @@ export function tryAddOverlayFromMedia(p: VideoProject, info: MediaInfo, at: num
     sourcePath: other,
   });
   if (info.hasAudio) {
+    const aud = newId();
+    ids.add(aud);
     clips.push({
-      id: newId(),
+      id: aud,
       kind: "audio",
       layer: "over",
       timelineStart: start,
@@ -309,7 +400,7 @@ export function tryAddOverlayFromMedia(p: VideoProject, info: MediaInfo, at: num
       sourcePath: other,
     });
   }
-  return { ok: true, clips };
+  return resolveOccupancy({ ...p, clips }, ids);
 }
 
 export class UndoStack {

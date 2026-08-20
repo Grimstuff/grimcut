@@ -110,9 +110,9 @@ function onDragMove(e: { clientX: number; buttons?: number }) {
   const delta = (e.clientX - d.startX) / d.pps;
   const snapSec = Math.min(0.25, Math.max(0.05, 10 / d.pps));
   const st = useEditor.getState();
-  if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta, snapSec);
-  if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta, snapSec);
-  if (d.kind === "move") st.liveMove(d.id, d.orig + delta, snapSec);
+  if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta, snapSec, d.before);
+  if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta, snapSec, d.before);
+  if (d.kind === "move") st.liveMove(d.id, d.orig + delta, snapSec, d.before);
 }
 
 function ensureDragListeners() {

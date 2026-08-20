@@ -86,8 +86,8 @@ type EditorState = {
   undo: () => void;
   redo: () => void;
   select: (id: string | null) => void;
-  liveTrim: (id: string, edge: "left" | "right", sourceEdge: number, snapSec?: number) => void;
-  liveMove: (id: string, timelineStart: number, snapSec?: number) => void;
+  liveTrim: (id: string, edge: "left" | "right", sourceEdge: number, snapSec?: number, from?: Clip[]) => void;
+  liveMove: (id: string, timelineStart: number, snapSec?: number, from?: Clip[]) => void;
   commit: (before: Clip[], label: string) => void;
   snapshot: () => Clip[] | null;
   toggleLink: (id: string) => void;
@@ -442,22 +442,24 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   select: (id) => set({ selectedId: id }),
 
-  liveTrim: (id, edge, sourceEdge, snapSec = 0.12) => {
+  liveTrim: (id, edge, sourceEdge, snapSec = 0.12, from) => {
     const p = get().project;
     if (!p) return;
+    const src = { ...p, clips: from ?? p.clips };
     const kfs = get().media?.keyframeTimes ?? [];
     const snapped = snapToKeyframe(sourceEdge, kfs, snapSec);
-    const r = tryTrim(p, id, edge, snapped);
+    const r = tryTrim(src, id, edge, snapped);
     if (r.ok) set({ project: { ...p, clips: r.clips } });
   },
 
-  liveMove: (id, timelineStart, snapSec = 0.12) => {
+  liveMove: (id, timelineStart, snapSec = 0.12, from) => {
     const p = get().project;
     if (!p) return;
-    const clip = p.clips.find((c) => c.id === id);
+    const src = { ...p, clips: from ?? p.clips };
+    const clip = src.clips.find((c) => c.id === id);
     if (!clip) return;
     const kfs = get().media?.keyframeTimes ?? [];
-    let best = snapStart(p, clip, timelineStart, snapSec);
+    let best = snapStart(src, clip, timelineStart, snapSec);
     let bestD = Math.abs(best - timelineStart);
     const consider = (cand: number) => {
       if (cand < 0) return;
@@ -470,14 +472,14 @@ export const useEditor = create<EditorState>((set, get) => ({
     for (const kf of kfs) {
       if (kf < clip.sourceStart - 0.05 || kf > clip.sourceEnd + 0.05) continue;
       const offset = kf - clip.sourceStart;
-      for (const other of p.clips) {
+      for (const other of src.clips) {
         if (other.id === clip.id) continue;
         consider(other.timelineStart - offset);
         consider(other.timelineStart + (other.sourceEnd - other.sourceStart) - offset);
       }
       consider(-offset);
     }
-    const r = tryMove(p, id, best);
+    const r = tryMove(src, id, best);
     if (r.ok) set({ project: { ...p, clips: r.clips } });
   },
 
