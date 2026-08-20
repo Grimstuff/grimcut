@@ -32,6 +32,8 @@ pub struct ClipDto {
     pub source_start: f64,
     #[serde(default)]
     pub source_end: f64,
+    #[serde(default)]
+    pub source_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -574,9 +576,13 @@ fn mp4_copy_flags(dest: &str) -> Vec<&'static str> {
 
 fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
     if plan.clips.len() == 1 {
+        let src = plan.clips[0]
+            .source_path
+            .as_deref()
+            .unwrap_or(&plan.source_path);
         return extract_copy(
             ffmpeg,
-            &plan.source_path,
+            src,
             &plan.clips[0],
             &plan.output_path,
             plan.has_audio,
@@ -588,9 +594,13 @@ fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
     let mut list = String::new();
     for (i, clip) in plan.clips.iter().enumerate() {
         let part = work.join(format!("part_{i:03}.mkv"));
+        let src = clip
+            .source_path
+            .as_deref()
+            .unwrap_or(&plan.source_path);
         extract_copy(
             ffmpeg,
-            &plan.source_path,
+            src,
             clip,
             part.to_str().unwrap(),
             plan.has_audio,
@@ -725,10 +735,31 @@ fn even_dim(n: i32, fallback: i32) -> i32 {
     v - (v % 2)
 }
 
+fn collect_inputs(plan: &ExportPlan) -> Vec<String> {
+    let mut v = vec![plan.source_path.clone()];
+    for c in plan.clips.iter().chain(plan.audio_clips.iter().flatten()) {
+        if c.gap {
+            continue;
+        }
+        if let Some(p) = &c.source_path {
+            if !v.iter().any(|x| x == p) {
+                v.push(p.clone());
+            }
+        }
+    }
+    v
+}
+
+fn clip_input_index(inputs: &[String], plan: &ExportPlan, clip: &ClipDto) -> usize {
+    let src = clip.source_path.as_deref().unwrap_or(&plan.source_path);
+    inputs.iter().position(|p| p == src).unwrap_or(0)
+}
+
 fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
     let w = even_dim(plan.width.unwrap_or(1920), 1920);
     let h = even_dim(plan.height.unwrap_or(1080), 1080);
     let fps = plan.frame_rate.filter(|f| *f > 1.0 && *f < 240.0).unwrap_or(30.0);
+    let inputs = collect_inputs(plan);
 
     let mut fc = String::new();
     let mut vpads = String::new();
@@ -741,8 +772,9 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
         } else {
             let start = clip.source_start.max(0.0);
             let end = clip.source_end.max(start + 0.02);
+            let idx = clip_input_index(&inputs, plan, clip);
             fc.push_str(&format!(
-                "[0:v]trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={w}:{h}:flags=bicubic,format=yuv420p,setsar=1[v{i}];"
+                "[{idx}:v]trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={w}:{h}:flags=bicubic,format=yuv420p,setsar=1[v{i}];"
             ));
         }
         vpads.push_str(&format!("[v{i}]"));
@@ -765,8 +797,9 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
             } else {
                 let start = clip.source_start.max(0.0);
                 let end = clip.source_end.max(start + 0.02);
+                let idx = clip_input_index(&inputs, plan, clip);
                 fc.push_str(&format!(
-                    "[0:a]atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
+                    "[{idx}:a]atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
                 ));
             }
             apads.push_str(&format!("[a{i}]"));
@@ -798,17 +831,18 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
 
     let mut last_err = String::from("encode failed");
     for (i, enc) in attempts.iter().enumerate() {
-        let mut args: Vec<String> = vec![
-            "-hide_banner".into(),
-            "-y".into(),
-            "-i".into(),
-            plan.source_path.clone(),
+        let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
+        for inp in &inputs {
+            args.push("-i".into());
+            args.push(inp.clone());
+        }
+        args.extend([
             // FFmpeg 8: -/filter_complex reads the graph from a file (filter_complex_script is deprecated).
             "-/filter_complex".into(),
             filter_arg.clone(),
             "-map".into(),
             "[vout]".into(),
-        ];
+        ]);
         if plan.has_audio {
             args.extend([
                 "-map".into(),

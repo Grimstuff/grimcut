@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fromMedia, flattenKind, mapTimelineToSource, timelineDuration } from "./project";
-import { tryDelete, tryLiftRange, trySlice, tryToggleLink } from "./edits";
+import { tryAddOverlayFromMedia, tryDelete, tryLiftRange, trySlice, tryToggleLink } from "./edits";
 import type { MediaInfo } from "./types";
 
 const info: MediaInfo = {
@@ -46,6 +46,21 @@ describe("timeline model", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.clips.every((c) => c.linkGroup === null)).toBe(true);
+  });
+
+  it("drop second file becomes overlay at playhead", () => {
+    const p = fromMedia(info);
+    const extra: MediaInfo = { ...info, path: "C:/b.mp4", duration: 3, hasAudio: true };
+    const r = tryAddOverlayFromMedia(p, extra, 2);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const overV = r.clips.find((c) => c.kind === "video" && c.layer === "over");
+    expect(overV?.timelineStart).toBe(2);
+    expect(overV?.sourcePath).toBe("C:/b.mp4");
+    expect(overV?.sourceEnd).toBe(3);
+    expect(r.clips.filter((c) => c.layer === "over")).toHaveLength(2);
+    const at = mapTimelineToSource({ ...p, clips: r.clips }, 2.5);
+    expect(at?.clip.sourcePath).toBe("C:/b.mp4");
   });
 
   it("flatten uses overlay over base, then the clip underneath", () => {

@@ -153,6 +153,8 @@ export function Timeline() {
   const keyframes = useEditor((s) => s.media?.keyframeTimes ?? NO_KEYFRAMES);
   const range = useEditor((s) => s.range);
   const peaks = useEditor((s) => s.peaks);
+  const overlayPeaks = useEditor((s) => s.overlayPeaks);
+  const overlayMedia = useEditor((s) => s.overlayMedia);
   const busy = useEditor((s) => s.busy);
 
   useEffect(() => {
@@ -279,9 +281,9 @@ export function Timeline() {
               pps={pps}
               selected={c.id === selectedId}
               overlay
-              peaks={kind === "audio" ? peaks : []}
-              sourceDuration={project.sourceDuration}
-              keyframes={keyframes}
+              peaks={kind === "audio" ? (c.sourcePath ? overlayPeaks : peaks) : []}
+              sourceDuration={c.sourcePath && overlayMedia ? overlayMedia.duration : project.sourceDuration}
+              keyframes={c.sourcePath && overlayMedia ? overlayMedia.keyframeTimes : keyframes}
               onMove={(e) => startEdit("move", c, e, c.timelineStart)}
               onRange={(e) => startBox(kind, e)}
               onTrimL={(e) => startEdit("trimL", c, e, c.sourceStart)}
@@ -376,7 +378,7 @@ export function Timeline() {
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
       </div>
       <div className="timeline-foot">
-        <span>Select · top box moves · overlay is 2nd layer · Ctrl+X cut · Ctrl+V paste</span>
+        <span>Select · top box moves · drop a file onto overlay · Ctrl+X cut · Ctrl+V paste</span>
         <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>

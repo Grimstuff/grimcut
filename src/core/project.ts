@@ -78,6 +78,10 @@ export function isTimelineGap(p: VideoProject, t: number): boolean {
   return clipAt(p, t, "video") === null;
 }
 
+export function clipSourcePath(p: VideoProject, c: Clip): string {
+  return c.sourcePath || p.sourcePath;
+}
+
 export function mapTimelineToSource(p: VideoProject, t: number): { source: number; clip: Clip } | null {
   const c = clipAt(p, t, "video");
   if (!c) return null;
@@ -170,7 +174,7 @@ export function snapStart(
 }
 
 export type FlatSeg =
-  | { gap: false; sourceStart: number; sourceEnd: number }
+  | { gap: false; sourceStart: number; sourceEnd: number; sourcePath: string }
   | { gap: true; duration: number };
 
 /** Flatten a kind over the full timeline. Empty regions become gaps (black / silence). */
@@ -197,9 +201,10 @@ export function flattenKind(p: VideoProject, kind: ClipKind): FlatSeg[] {
     }
     const srcS = c.sourceStart + (a - c.timelineStart);
     const srcE = c.sourceStart + (b - c.timelineStart);
+    const srcPath = clipSourcePath(p, c);
     const last = out[out.length - 1];
-    if (last && !last.gap && Math.abs(last.sourceEnd - srcS) < 0.02) last.sourceEnd = srcE;
-    else out.push({ gap: false, sourceStart: srcS, sourceEnd: srcE });
+    if (last && !last.gap && last.sourcePath === srcPath && Math.abs(last.sourceEnd - srcS) < 0.02) last.sourceEnd = srcE;
+    else out.push({ gap: false, sourceStart: srcS, sourceEnd: srcE, sourcePath: srcPath });
   }
   return out.filter((r) => (r.gap ? r.duration > 0.01 : r.sourceEnd - r.sourceStart > 0.01));
 }

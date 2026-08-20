@@ -249,6 +249,9 @@ html.is-live-resize body {
 }
 
 .preview-wrap video {
+  position: absolute;
+  inset: 0;
+  margin: auto;
   height: 100%;
   width: auto;
   max-width: 100%;
@@ -257,6 +260,20 @@ html.is-live-resize body {
   object-position: center center;
   background: #000;
   flex-shrink: 0;
+}
+
+.preview-wrap video.is-base.is-dim {
+  opacity: 0;
+}
+
+.preview-wrap video.is-over {
+  opacity: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.preview-wrap video.is-over.is-on {
+  opacity: 1;
 }
 
 .drop-hint {
@@ -275,6 +292,7 @@ html.is-live-resize body {
 .black-gap {
   position: absolute;
   inset: 0;
+  z-index: 3;
   background: #000;
   display: grid;
   place-items: center;

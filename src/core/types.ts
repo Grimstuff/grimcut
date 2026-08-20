@@ -11,6 +11,8 @@ export type Clip = {
   sourceEnd: number;
   /** Shared id with the paired A/V clip; null = unlinked. */
   linkGroup: string | null;
+  /** Other file than the project source (overlay from a drop). */
+  sourcePath?: string;
 };
 
 export type VideoProject = {
@@ -38,6 +40,7 @@ export type ClipboardChunk = {
   kind: ClipKind;
   sourceStart: number;
   sourceEnd: number;
+  sourcePath?: string;
 };
 
 export type PlaybackKind = "continue" | "jump" | "gap" | "stop";

@@ -12,7 +12,7 @@ import { startHotkeys } from "./lib/hotkeys";
 
 export default function App() {
   const status = useEditor((s) => s.status);
-  const openPath = useEditor((s) => s.openPath);
+  const dropFile = useEditor((s) => s.dropFile);
   const setProgress = useEditor((s) => s.setProgress);
   const mediaW = useEditor((s) => s.media?.width ?? 0);
   const mediaH = useEditor((s) => s.media?.height ?? 0);
@@ -27,7 +27,7 @@ export default function App() {
         unlistenDrop = await webview.onDragDropEvent((event) => {
           if (event.payload.type === "drop") {
             const p = event.payload.paths[0];
-            if (p) void openPath(p);
+            if (p) void dropFile(p);
           }
         });
       } catch {
@@ -48,7 +48,7 @@ export default function App() {
       unlistenDrop?.();
       unlistenProg?.();
     };
-  }, [openPath, setProgress]);
+  }, [dropFile, setProgress]);
 
   useEffect(() => startPlaybackClock(), []);
   useEffect(() => {

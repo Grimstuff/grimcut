@@ -1,5 +1,5 @@
-import { mapTimelineToSource, timelineDuration } from "../core/project";
-import { clipEnd, type Clip } from "../core/types";
+import { clipSourcePath, mapTimelineToSource, timelineDuration } from "../core/project";
+import { clipEnd, type Clip, type VideoProject } from "../core/types";
 import { useEditor } from "../store/editorStore";
 
 const RAF_KEY = "__grimcutPlaybackRaf";
@@ -8,6 +8,8 @@ const GEN_KEY = "__grimcutPlaybackGen";
 type ClockWin = Window & { [RAF_KEY]?: number; [GEN_KEY]?: number };
 
 let videoEl: HTMLVideoElement | null = null;
+let overlayEl: HTMLVideoElement | null = null;
+let activeEl: HTMLVideoElement | null = null;
 let lastWall = 0;
 let lastClipId: string | null = null;
 let fileSeeking = false;
@@ -20,6 +22,26 @@ let destClipId: string | null = null;
 
 export function setPreviewVideo(el: HTMLVideoElement | null) {
   videoEl = el;
+}
+
+export function setOverlayVideo(el: HTMLVideoElement | null) {
+  overlayEl = el;
+}
+
+function videoFor(p: VideoProject, clip: Clip): HTMLVideoElement | null {
+  const path = clipSourcePath(p, clip);
+  if (path !== p.sourcePath && overlayEl) return overlayEl;
+  return videoEl;
+}
+
+function pauseAll() {
+  videoEl?.pause();
+  overlayEl?.pause();
+}
+
+function useLane(v: HTMLVideoElement | null) {
+  activeEl = v;
+  useEditor.setState({ previewOver: v != null && overlayEl != null && v === overlayEl });
 }
 
 export function noteUserSeek() {
@@ -54,12 +76,15 @@ function seekTo(v: HTMLVideoElement, source: number, clipId: string) {
   lastSeekAt = now;
   destClipId = clipId;
   const t = Math.max(0, source);
+  const switched = activeEl != null && activeEl !== v;
   const from = v.currentTime;
   seekTarget = t;
   fileSeeking = true;
-  covering = Number.isFinite(from) && from - t > 0.08;
+  covering = switched || (Number.isFinite(from) && from - t > 0.08);
+  if (activeEl && activeEl !== v) activeEl.pause();
+  useLane(v);
   if (!v.paused) v.pause();
-  if (!Number.isFinite(from) || Math.abs(from - t) > 0.04) {
+  if (!Number.isFinite(from) || Math.abs(from - t) > 0.04 || switched) {
     try {
       v.currentTime = t;
     } catch {
@@ -71,7 +96,7 @@ function seekTo(v: HTMLVideoElement, source: number, clipId: string) {
 }
 
 export function markVideoSeekDone() {
-  const v = videoEl;
+  const v = activeEl ?? videoEl;
   const st = useEditor.getState();
   if (!v || !st.playing) return;
   const target = seekTarget;
@@ -109,13 +134,12 @@ export function togglePlayback() {
   }
   if (!st.project) return;
 
-  const v = videoEl;
   if (st.playing) {
     st.setPlaying(false);
     lastWall = 0;
     covering = false;
     fileSeeking = false;
-    v?.pause();
+    pauseAll();
     return;
   }
 
@@ -130,24 +154,24 @@ export function togglePlayback() {
   const mapped = mapTimelineToSource(st.project, st.playhead);
   if (!mapped) {
     lastClipId = null;
-    v?.pause();
+    pauseAll();
     return;
   }
   lastClipId = mapped.clip.id;
-  if (!v) return;
-  seekTo(v, mapped.source, mapped.clip.id);
+  const playEl = videoFor(st.project, mapped.clip);
+  if (!playEl) return;
+  seekTo(playEl, mapped.source, mapped.clip.id);
   covering = false;
-  playVideo(v, true);
+  playVideo(playEl, true);
 }
 
 function tick(now: number) {
   const st = useEditor.getState();
-  const v = videoEl;
 
   if (!st.playing) {
     lastWall = 0;
     covering = false;
-    if (v && !v.paused) v.pause();
+    pauseAll();
     return;
   }
 
@@ -161,6 +185,7 @@ function tick(now: number) {
   const end = Math.max(timelineDuration(p), 0.01);
   let ph = Math.max(st.playhead, minPh);
   let mapped = mapTimelineToSource(p, ph);
+  let v = mapped ? videoFor(p, mapped.clip) : videoEl;
 
   if (v && mapped && (fileSeeking || covering)) {
     const src = v.currentTime;
@@ -239,7 +264,7 @@ function tick(now: number) {
     useEditor.setState({ playhead: end, showBlack: true, playing: false });
     lastWall = 0;
     covering = false;
-    v?.pause();
+    pauseAll();
     return;
   }
 
@@ -249,17 +274,19 @@ function tick(now: number) {
     covering = false;
     fileSeeking = false;
     minPh = ph;
-    useEditor.setState({ playhead: ph, showBlack: true });
-    if (v && !v.paused) v.pause();
+    useEditor.setState({ playhead: ph, showBlack: true, previewOver: false });
+    pauseAll();
     return;
   }
 
+  v = videoFor(p, mapped.clip);
   minPh = Math.max(minPh, ph);
   useEditor.setState({ playhead: ph, showBlack: covering, selectedId: mapped.clip.id });
   if (!v) return;
 
   if (lastClipId !== mapped.clip.id) {
     lastClipId = mapped.clip.id;
+    pauseAll();
     seekTo(v, mapped.source, mapped.clip.id);
     return;
   }

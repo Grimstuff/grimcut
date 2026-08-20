@@ -1,10 +1,13 @@
 import { useEffect, useRef } from "react";
 import { useEditor } from "../store/editorStore";
-import { markVideoSeekDone, setPreviewVideo, togglePlayback } from "../lib/playbackClock";
+import { markVideoSeekDone, setOverlayVideo, setPreviewVideo, togglePlayback } from "../lib/playbackClock";
 
 export function Preview() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const overRef = useRef<HTMLVideoElement>(null);
   const previewUrl = useEditor((s) => s.previewUrl);
+  const overlayUrl = useEditor((s) => s.overlayUrl);
+  const previewOver = useEditor((s) => s.previewOver);
   const showBlack = useEditor((s) => s.showBlack);
   const pickOpen = useEditor((s) => s.pickOpen);
   const setPlayhead = useEditor((s) => s.setPlayhead);
@@ -19,6 +22,18 @@ export function Preview() {
       v.removeEventListener("seeked", clear);
     };
   }, [previewUrl]);
+
+  useEffect(() => {
+    const v = overRef.current;
+    setOverlayVideo(v ?? null);
+    if (!v) return;
+    const clear = () => markVideoSeekDone();
+    v.addEventListener("seeked", clear);
+    return () => {
+      v.removeEventListener("seeked", clear);
+      setOverlayVideo(null);
+    };
+  }, [overlayUrl]);
 
   if (!previewUrl) {
     return (
@@ -42,6 +57,7 @@ export function Preview() {
           videoRef.current = el;
           setPreviewVideo(el);
         }}
+        className={`is-base${previewOver ? " is-dim" : ""}`}
         src={previewUrl}
         tabIndex={-1}
         playsInline
@@ -50,10 +66,24 @@ export function Preview() {
         onLoadedMetadata={() => {
           const v = videoRef.current;
           if (!v) return;
-          const src = setPlayhead(0);
+          const src = setPlayhead(useEditor.getState().playhead);
           if (src != null) v.currentTime = src;
         }}
       />
+      {overlayUrl ? (
+        <video
+          ref={(el) => {
+            overRef.current = el;
+            setOverlayVideo(el);
+          }}
+          className={`is-over${previewOver ? " is-on" : ""}`}
+          src={overlayUrl}
+          tabIndex={-1}
+          playsInline
+          preload="auto"
+          disablePictureInPicture
+        />
+      ) : null}
       {showBlack ? <div className="black-gap" /> : null}
     </div>
   );

@@ -17,6 +17,7 @@ import {
   UndoStack,
   chunkFromRange,
   tryDelete,
+  tryAddOverlayFromMedia,
   tryLiftRange,
   tryMove,
   tryPaste,
@@ -37,6 +38,10 @@ type EditorState = {
   status: string;
   busy: boolean;
   previewUrl: string | null;
+  overlayUrl: string | null;
+  overlayPeaks: number[];
+  overlayMedia: MediaInfo | null;
+  previewOver: boolean;
   showBlack: boolean;
   canUndo: boolean;
   canRedo: boolean;
@@ -51,6 +56,8 @@ type EditorState = {
   menuOpen: boolean;
   progress: { label: string; pct: number } | null;
   openPath: (path: string) => Promise<void>;
+  dropFile: (path: string) => Promise<void>;
+  addOverlay: (path: string) => Promise<void>;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
   setPlayhead: (t: number) => number | null;
@@ -102,6 +109,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   status: "Drop a video or File → Open…",
   busy: false,
   previewUrl: null,
+  overlayUrl: null,
+  overlayPeaks: [],
+  overlayMedia: null,
+  previewOver: false,
   showBlack: false,
   canUndo: false,
   canRedo: false,
@@ -164,6 +175,10 @@ export const useEditor = create<EditorState>((set, get) => ({
           playhead: 0,
           selectedId: project.clips[0]?.id ?? null,
           previewUrl,
+          overlayUrl: null,
+          overlayPeaks: [],
+          overlayMedia: null,
+          previewOver: false,
           showBlack: false,
           busy: false,
           progress: null,
@@ -194,6 +209,63 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (typeof path === "string") await get().openPath(path);
   },
 
+  dropFile: async (path) => {
+    if (!/\.(mp4|mkv|mov|avi|webm|m4v|wmv)$/i.test(path)) {
+      set({ status: "Drop a video file." });
+      return;
+    }
+    if (get().project) await get().addOverlay(path);
+    else await get().openPath(path);
+  },
+
+  addOverlay: async (path) => {
+    const p = get().project;
+    if (!p) {
+      await get().openPath(path);
+      return;
+    }
+    set({ busy: true, progress: { label: "Reading overlay…", pct: 12 }, status: "Adding overlay…" });
+    try {
+      const media = await invoke<MediaInfo>("probe", { path });
+      const at = get().playhead;
+      const r = tryAddOverlayFromMedia(p, media, at);
+      if (!r.ok) {
+        set({ busy: false, progress: null, status: r.error });
+        return;
+      }
+      let overlayUrl = convertFileSrc(path);
+      if (!/\.(mp4|m4v|webm|mov)$/i.test(path)) {
+        try {
+          overlayUrl = convertFileSrc(await invoke<string>("make_proxy", { path }));
+        } catch {
+          /* native */
+        }
+      }
+      let overlayPeaks: number[] = [];
+      if (media.hasAudio) {
+        set({ progress: { label: "Overlay waveform…", pct: 55 } });
+        try {
+          overlayPeaks = await invoke<number[]>("waveform", { path });
+        } catch {
+          overlayPeaks = [];
+        }
+      }
+      const over = r.clips.find((c) => c.layer === "over" && c.kind === "video");
+      applyClips(get, set, r.clips, "Overlay (2nd layer)");
+      set({
+        overlayUrl,
+        overlayPeaks,
+        overlayMedia: media,
+        selectedId: over?.id ?? get().selectedId,
+        busy: false,
+        progress: null,
+        status: `Overlay: ${path.split(/[/\\]/).pop()} at ${formatTime(at)} — trim or move the 2nd layer`,
+      });
+    } catch (e) {
+      set({ busy: false, progress: null, status: String(e) });
+    }
+  },
+
   closeProject: () => {
     history.clear();
     set(
@@ -203,6 +275,10 @@ export const useEditor = create<EditorState>((set, get) => ({
         playhead: 0,
         selectedId: null,
         previewUrl: null,
+        overlayUrl: null,
+        overlayPeaks: [],
+        overlayMedia: null,
+        previewOver: false,
         showBlack: false,
         peaks: [],
         range: null,
@@ -349,7 +425,12 @@ export const useEditor = create<EditorState>((set, get) => ({
       const c = p?.clips.find((x) => x.id === id);
       if (c) {
         set({
-          clipboard: { kind: c.kind, sourceStart: c.sourceStart, sourceEnd: c.sourceEnd },
+          clipboard: {
+            kind: c.kind,
+            sourceStart: c.sourceStart,
+            sourceEnd: c.sourceEnd,
+            sourcePath: c.sourcePath,
+          },
           status: "Copied clip",
         });
       }
@@ -442,10 +523,12 @@ export const useEditor = create<EditorState>((set, get) => ({
     const audioClips = flattenKind(project, "audio");
     const videoClips = project.clips.filter((c) => c.kind === "video");
     const hasGap = clips.some((c) => c.gap) || audioClips.some((c) => c.gap);
+    const otherFile = clips.some((s) => !s.gap && s.sourcePath !== project.sourcePath);
     const mediaOnly = (segs: typeof clips) =>
       segs.filter((s) => !s.gap).map((s) => ({ sourceStart: s.sourceStart, sourceEnd: s.sourceEnd }));
     const useStreamCopy =
       !hasGap &&
+      !otherFile &&
       canStreamCopyAllClips(videoClips, media.keyframeTimes, media.frameRate) &&
       mediaOnly(audioClips).length === mediaOnly(clips).length;
     set({

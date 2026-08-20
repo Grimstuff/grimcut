@@ -3,6 +3,7 @@ import {
   type ClipKind,
   type ClipLayer,
   type ClipboardChunk,
+  type MediaInfo,
   type VideoProject,
   MIN_CLIP,
   clipDuration,
@@ -246,6 +247,7 @@ export function tryPaste(
       sourceStart: chunk.sourceStart,
       sourceEnd: chunk.sourceEnd,
       linkGroup: null,
+      sourcePath: chunk.sourcePath,
     });
     return { ok: true, clips: rest };
   }
@@ -257,6 +259,7 @@ export function tryPaste(
     sourceStart: chunk.sourceStart,
     sourceEnd: chunk.sourceEnd,
     linkGroup: null,
+    sourcePath: chunk.sourcePath,
   });
   return { ok: true, clips };
 }
@@ -275,7 +278,40 @@ export function chunkFromRange(
   const srcA = c.sourceStart + (Math.max(a, c.timelineStart) - c.timelineStart);
   const srcB = c.sourceStart + (Math.min(b, clipEnd(c)) - c.timelineStart);
   if (srcB - srcA < MIN_CLIP) return null;
-  return { kind, sourceStart: srcA, sourceEnd: srcB };
+  return { kind, sourceStart: srcA, sourceEnd: srcB, sourcePath: c.sourcePath };
+}
+
+/** Place a second media file on overlay (2nd layer) at `at`. Replaces any existing overlay. */
+export function tryAddOverlayFromMedia(p: VideoProject, info: MediaInfo, at: number): EditResult {
+  const duration = info.duration > 0 ? info.duration : 0;
+  if (duration < MIN_CLIP) return { ok: false, error: "That file is too short." };
+  const start = Math.max(0, at);
+  const other = info.path !== p.sourcePath ? info.path : undefined;
+  const group = newId();
+  const clips = p.clips.filter((c) => c.layer !== "over");
+  clips.push({
+    id: newId(),
+    kind: "video",
+    layer: "over",
+    timelineStart: start,
+    sourceStart: 0,
+    sourceEnd: duration,
+    linkGroup: info.hasAudio ? group : null,
+    sourcePath: other,
+  });
+  if (info.hasAudio) {
+    clips.push({
+      id: newId(),
+      kind: "audio",
+      layer: "over",
+      timelineStart: start,
+      sourceStart: 0,
+      sourceEnd: duration,
+      linkGroup: group,
+      sourcePath: other,
+    });
+  }
+  return { ok: true, clips };
 }
 
 export class UndoStack {
