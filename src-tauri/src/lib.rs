@@ -448,7 +448,7 @@ fn waveform(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
             "-ac",
             "1",
             "-ar",
-            "2000",
+            "8000",
             "-f",
             "u8",
             "-acodec",
@@ -464,7 +464,8 @@ fn waveform(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
     if raw.is_empty() {
         return Ok(vec![]);
     }
-    const MAX: usize = 2400;
+    // Dense enough that zooming in still has a peak per pixel or two.
+    const MAX: usize = 40000;
     let bucket = (raw.len() / MAX).max(1);
     let mut peaks = Vec::with_capacity(raw.len() / bucket + 1);
     let mut i = 0;
