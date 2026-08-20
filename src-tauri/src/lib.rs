@@ -36,6 +36,38 @@ pub struct ClipDto {
     pub source_path: Option<String>,
 }
 
+fn default_one() -> f64 {
+    1.0
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompLayerDto {
+    pub source_path: String,
+    pub source_start: f64,
+    pub source_end: f64,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default = "default_one")]
+    pub scale: f64,
+    #[serde(default)]
+    pub rotation: f64,
+    #[serde(default)]
+    pub src_width: i32,
+    #[serde(default)]
+    pub src_height: i32,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompSliceDto {
+    pub duration: f64,
+    #[serde(default)]
+    pub layers: Vec<CompLayerDto>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportPlan {
@@ -52,6 +84,8 @@ pub struct ExportPlan {
     pub height: Option<i32>,
     #[serde(default)]
     pub frame_rate: Option<f64>,
+    #[serde(default)]
+    pub comp_slices: Option<Vec<CompSliceDto>>,
 }
 
 #[derive(Serialize)]
@@ -737,13 +771,23 @@ fn even_dim(n: i32, fallback: i32) -> i32 {
 
 fn collect_inputs(plan: &ExportPlan) -> Vec<String> {
     let mut v = vec![plan.source_path.clone()];
+    let push = |v: &mut Vec<String>, p: &str| {
+        if !v.iter().any(|x| x == p) {
+            v.push(p.to_string());
+        }
+    };
     for c in plan.clips.iter().chain(plan.audio_clips.iter().flatten()) {
         if c.gap {
             continue;
         }
         if let Some(p) = &c.source_path {
-            if !v.iter().any(|x| x == p) {
-                v.push(p.clone());
+            push(&mut v, p);
+        }
+    }
+    if let Some(slices) = &plan.comp_slices {
+        for s in slices {
+            for l in &s.layers {
+                push(&mut v, &l.source_path);
             }
         }
     }
@@ -755,7 +799,167 @@ fn clip_input_index(inputs: &[String], plan: &ExportPlan, clip: &ClipDto) -> usi
     inputs.iter().position(|p| p == src).unwrap_or(0)
 }
 
+fn contain_wh(src_w: i32, src_h: i32, canvas_w: i32, canvas_h: i32, scale: f64) -> (i32, i32) {
+    let sw = src_w.max(2) as f64;
+    let sh = src_h.max(2) as f64;
+    let fit = (canvas_w as f64 / sw).min(canvas_h as f64 / sh) * scale.max(0.02);
+    (
+        even_dim((sw * fit) as i32, 2),
+        even_dim((sh * fit) as i32, 2),
+    )
+}
+
+fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
+    let w = even_dim(plan.width.unwrap_or(1920), 1920);
+    let h = even_dim(plan.height.unwrap_or(1080), 1080);
+    let fps = plan.frame_rate.filter(|f| *f > 1.0 && *f < 240.0).unwrap_or(30.0);
+    let inputs = collect_inputs(plan);
+    let slices = plan.comp_slices.as_ref().unwrap();
+    let mut fc = String::new();
+    let mut vpads = String::new();
+    for (i, slice) in slices.iter().enumerate() {
+        let d = slice.duration.max(0.02);
+        if slice.layers.is_empty() {
+            fc.push_str(&format!(
+                "color=c=black:s={w}x{h}:r={fps}:d={d:.6},format=yuv420p,setsar=1[v{i}];"
+            ));
+            vpads.push_str(&format!("[v{i}]"));
+            continue;
+        }
+        fc.push_str(&format!(
+            "color=c=black:s={w}x{h}:r={fps}:d={d:.6},format=yuv420p,setsar=1[bg{i}];"
+        ));
+        let mut prev = format!("bg{i}");
+        for (j, layer) in slice.layers.iter().enumerate() {
+            let idx = inputs
+                .iter()
+                .position(|p| p == &layer.source_path)
+                .unwrap_or(0);
+            let start = layer.source_start.max(0.0);
+            let end = layer.source_end.max(start + 0.02);
+            let (dw, dh) = contain_wh(layer.src_width, layer.src_height, w, h, layer.scale);
+            let lab = format!("l{i}_{j}");
+            let rot = layer.rotation;
+            if rot.abs() > 0.05 {
+                fc.push_str(&format!(
+                    "[{idx}:v]trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={dw}:{dh}:flags=bicubic,format=rgba,rotate={rad:.6}:ow=rotw(iw):oh=roth(ih):c=none[{lab}];",
+                    rad = rot * std::f64::consts::PI / 180.0
+                ));
+            } else {
+                fc.push_str(&format!(
+                    "[{idx}:v]trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={dw}:{dh}:flags=bicubic,format=yuv420p[{lab}];"
+                ));
+            }
+            let out = if j + 1 == slice.layers.len() {
+                format!("v{i}")
+            } else {
+                format!("t{i}_{j}")
+            };
+            fc.push_str(&format!(
+                "[{prev}][{lab}]overlay=x=(main_w-overlay_w)/2+{x:.2}:y=(main_h-overlay_h)/2+{y:.2}:shortest=1[{out}];",
+                x = layer.x,
+                y = layer.y
+            ));
+            prev = out;
+        }
+        vpads.push_str(&format!("[v{i}]"));
+    }
+    fc.push_str(&format!(
+        "{}concat=n={}:v=1:a=0[vout];",
+        vpads,
+        slices.len()
+    ));
+
+    let audio_src = plan.audio_clips.as_ref().unwrap_or(&plan.clips);
+    if plan.has_audio && !audio_src.is_empty() {
+        let mut apads = String::new();
+        for (i, clip) in audio_src.iter().enumerate() {
+            if clip.gap {
+                let d = clip.duration.max(0.02);
+                fc.push_str(&format!(
+                    "anullsrc=r=48000:cl=stereo:d={d:.6},aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
+                ));
+            } else {
+                let start = clip.source_start.max(0.0);
+                let end = clip.source_end.max(start + 0.02);
+                let idx = clip_input_index(&inputs, plan, clip);
+                fc.push_str(&format!(
+                    "[{idx}:a]atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
+                ));
+            }
+            apads.push_str(&format!("[a{i}]"));
+        }
+        fc.push_str(&format!(
+            "{}concat=n={}:v=0:a=1[aout]",
+            apads,
+            audio_src.len()
+        ));
+    } else if fc.ends_with(';') {
+        fc.pop();
+    }
+
+    let work = std::env::temp_dir().join(format!("grimcut-comp-{}", uuid_like()));
+    fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let filter_path = work.join("filter.txt");
+    fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
+    let filter_arg = filter_path.to_string_lossy().into_owned();
+    let attempts = working_encoders(ffmpeg);
+    if attempts.is_empty() {
+        let _ = fs::remove_dir_all(&work);
+        return Err("No H.264 encoder available.".into());
+    }
+    let mut last_err = String::from("encode failed");
+    for (i, enc) in attempts.iter().enumerate() {
+        let _ = app.emit("export-progress", format!("Trying {}…", enc.label));
+        let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
+        for inp in &inputs {
+            args.push("-i".into());
+            args.push(inp.clone());
+        }
+        args.extend([
+            "-/filter_complex".into(),
+            filter_arg.clone(),
+            "-map".into(),
+            "[vout]".into(),
+        ]);
+        if plan.has_audio {
+            args.extend([
+                "-map".into(),
+                "[aout]".into(),
+                "-c:a".into(),
+                "aac".into(),
+                "-b:a".into(),
+                "192k".into(),
+            ]);
+        } else {
+            args.push("-an".into());
+        }
+        for a in &enc.args {
+            args.push((*a).into());
+        }
+        args.push(plan.output_path.clone());
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let (_, err, code) = run_cmd(ffmpeg, &arg_refs)?;
+        if code == 0 {
+            let _ = fs::remove_dir_all(&work);
+            return Ok(enc.label.to_string());
+        }
+        last_err = trim_ffmpeg_err(&err);
+        let _ = attempts.get(i + 1);
+    }
+    let _ = fs::remove_dir_all(&work);
+    Err(last_err)
+}
+
 fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
+    if plan
+        .comp_slices
+        .as_ref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        return export_composite(app, ffmpeg, plan);
+    }
     let w = even_dim(plan.width.unwrap_or(1920), 1920);
     let h = even_dim(plan.height.unwrap_or(1080), 1080);
     let fps = plan.frame_rate.filter(|f| *f > 1.0 && *f < 240.0).unwrap_or(30.0);

@@ -4,7 +4,8 @@ import { clipsOn, rulerDuration, timelineDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
 import { Waveform } from "./Waveform";
 import { startHotkeys } from "../lib/hotkeys";
-import { noteUserSeek } from "../lib/playbackClock";
+import { noteUserSeek, syncPreviewToPlayhead, togglePlayback } from "../lib/playbackClock";
+import { AR_PRESETS } from "../core/canvas";
 
 type Drag =
   | { kind: "seek"; pps: number; total: number }
@@ -21,9 +22,8 @@ type Drag =
 
 function seekVideo(t: number) {
   noteUserSeek();
-  const src = useEditor.getState().setPlayhead(t);
-  const v = document.querySelector("video");
-  if (v && src != null) v.currentTime = src;
+  useEditor.getState().setPlayhead(t);
+  syncPreviewToPlayhead();
 }
 
 const GUTTER = 22;
@@ -172,6 +172,7 @@ export function Timeline() {
   const mediaByPath = useEditor((s) => s.mediaByPath);
   const dropGhost = useEditor((s) => s.dropGhost);
   const busy = useEditor((s) => s.busy);
+  const playing = useEditor((s) => s.playing);
 
   useEffect(() => {
     const measure = () => {
@@ -364,6 +365,10 @@ export function Timeline() {
           {range && rangeDur > 0.04 ? ` · sel ${formatTime(rangeDur)}` : ""}
         </span>
         <div className="timeline-actions">
+          <button type="button" className={playing ? "is-on" : ""} title="Play / pause (Space)" onClick={() => togglePlayback()}>
+            {playing ? "Pause" : "Play"}
+          </button>
+          <CanvasSize />
           <button type="button" title="Slice at playhead (S / double-click)" onClick={() => useEditor.getState().slice()}>
             Slice
           </button>
@@ -386,12 +391,6 @@ export function Timeline() {
             onClick={() => useEditor.getState().liftRange()}
           >
             Cut
-          </button>
-          <button type="button" onClick={() => useEditor.getState().copyRange()}>
-            Copy
-          </button>
-          <button type="button" onClick={() => useEditor.getState().paste()}>
-            Paste
           </button>
           <button type="button" disabled={!useEditor.getState().canUndo} onClick={() => useEditor.getState().undo()}>
             Undo
@@ -431,6 +430,60 @@ export function Timeline() {
         <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>
+  );
+}
+
+function CanvasSize() {
+  const project = useEditor((s) => s.project);
+  const [w, setW] = useState("");
+  const [h, setH] = useState("");
+  useEffect(() => {
+    if (!project) return;
+    setW(String(project.canvasWidth));
+    setH(String(project.canvasHeight));
+  }, [project?.canvasWidth, project?.canvasHeight]);
+  if (!project) return null;
+  const apply = () => {
+    const nw = Number.parseInt(w, 10);
+    const nh = Number.parseInt(h, 10);
+    if (nw > 1 && nh > 1) useEditor.getState().setCanvas(nw, nh);
+  };
+  const cur = `${project.canvasWidth}:${project.canvasHeight}`;
+  return (
+    <span className="canvas-ctrl">
+      <input
+        className="canvas-dim"
+        value={w}
+        onChange={(e) => setW(e.target.value)}
+        onBlur={apply}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") apply();
+        }}
+        aria-label="Canvas width"
+      />
+      <span>×</span>
+      <input
+        className="canvas-dim"
+        value={h}
+        onChange={(e) => setH(e.target.value)}
+        onBlur={apply}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") apply();
+        }}
+        aria-label="Canvas height"
+      />
+      {AR_PRESETS.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          className={cur === `${p.w}:${p.h}` ? "is-on" : ""}
+          title={`${p.w}×${p.h}`}
+          onClick={() => useEditor.getState().setCanvasPreset(p.id)}
+        >
+          {p.id}
+        </button>
+      ))}
+    </span>
   );
 }
 

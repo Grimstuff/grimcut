@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fromMedia, flattenKind, mapTimelineToSource, timelineDuration } from "./project";
+import { fromMedia, flattenCanvas, flattenKind, mapTimelineToSource, timelineDuration } from "./project";
 import { tryAddOverlayFromMedia, tryDelete, tryLiftRange, tryMove, trySlice, tryToggleLink } from "./edits";
 import type { MediaInfo } from "./types";
 
@@ -11,6 +11,15 @@ const info: MediaInfo = {
 };
 
 describe("timeline model", () => {
+  it("canvas defaults to media size", () => {
+    const p = fromMedia({ ...info, width: 1920, height: 1080 });
+    expect(p.canvasWidth).toBe(1920);
+    expect(p.canvasHeight).toBe(1080);
+    const slices = flattenCanvas(p, { ...info, width: 1920, height: 1080 });
+    expect(slices[0].layers).toHaveLength(1);
+    expect(slices[0].layers[0].scale).toBe(1);
+  });
+
   it("opens with linked video+audio", () => {
     const p = fromMedia(info);
     expect(p.clips).toHaveLength(2);

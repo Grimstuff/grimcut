@@ -13,8 +13,8 @@ import { startHotkeys } from "./lib/hotkeys";
 export default function App() {
   const status = useEditor((s) => s.status);
   const setProgress = useEditor((s) => s.setProgress);
-  const mediaW = useEditor((s) => s.media?.width ?? 0);
-  const mediaH = useEditor((s) => s.media?.height ?? 0);
+  const mediaW = useEditor((s) => s.project?.canvasWidth ?? s.media?.width ?? 0);
+  const mediaH = useEditor((s) => s.project?.canvasHeight ?? s.media?.height ?? 0);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", "dark");

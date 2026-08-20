@@ -11,6 +11,7 @@ import {
   cloneClip,
   newId,
 } from "./types";
+import { defaultTransform } from "./canvas";
 import { clipAt, partner } from "./project";
 
 export type EditResult = { ok: true; clips: Clip[] } | { ok: false; error: string };
@@ -344,6 +345,7 @@ export function tryPaste(
     sourceEnd: chunk.sourceEnd,
     linkGroup: null,
     sourcePath: chunk.sourcePath,
+    transform: defaultTransform(),
   });
   return resolveOccupancy({ ...p, clips }, new Set([placed]));
 }
@@ -385,6 +387,7 @@ export function tryAddOverlayFromMedia(p: VideoProject, info: MediaInfo, at: num
     sourceEnd: duration,
     linkGroup: info.hasAudio ? group : null,
     sourcePath: other,
+    transform: defaultTransform(),
   });
   if (info.hasAudio) {
     const aud = newId();

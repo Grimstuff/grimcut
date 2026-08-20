@@ -1,3 +1,7 @@
+import type { ClipTransform } from "./canvas";
+
+export type { ClipTransform };
+
 export type ClipKind = "video" | "audio";
 /** Two-layer system: `base` is the main track, `over` is the single 2nd layer per kind. Overlay wins while it covers. */
 export type ClipLayer = "base" | "over";
@@ -13,11 +17,15 @@ export type Clip = {
   linkGroup: string | null;
   /** Other file than the project source (overlay from a drop). */
   sourcePath?: string;
+  /** Canvas placement. scale=1 fits the whole frame in the canvas. */
+  transform?: ClipTransform;
 };
 
 export type VideoProject = {
   sourcePath: string;
   sourceDuration: number;
+  canvasWidth: number;
+  canvasHeight: number;
   clips: Clip[];
 };
 
@@ -65,7 +73,7 @@ export function clipEnd(s: Clip): number {
 }
 
 export function cloneClip(s: Clip): Clip {
-  return { ...s };
+  return { ...s, transform: s.transform ? { ...s.transform } : undefined };
 }
 
 export function newId(): string {

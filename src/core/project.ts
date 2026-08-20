@@ -1,3 +1,4 @@
+import { clipXf, evenPx, type ClipTransform } from "./canvas";
 import {
   type Clip,
   type ClipKind,
@@ -24,6 +25,7 @@ export function fromMedia(info: MediaInfo): VideoProject {
       sourceStart: 0,
       sourceEnd: duration,
       linkGroup: group,
+      transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     },
   ];
   if (info.hasAudio) {
@@ -37,7 +39,13 @@ export function fromMedia(info: MediaInfo): VideoProject {
       linkGroup: group,
     });
   }
-  return { sourcePath: info.path, sourceDuration: info.duration, clips };
+  return {
+    sourcePath: info.path,
+    sourceDuration: info.duration,
+    canvasWidth: evenPx(info.width ?? 1920, 1920),
+    canvasHeight: evenPx(info.height ?? 1080, 1080),
+    clips,
+  };
 }
 
 export function timelineDuration(p: VideoProject): number {
@@ -76,7 +84,7 @@ export function partner(p: VideoProject, clip: Clip): Clip | null {
 }
 
 export function isTimelineGap(p: VideoProject, t: number): boolean {
-  return clipAt(p, t, "video") === null;
+  return !clipAt(p, t, "video", "base") && !clipAt(p, t, "video", "over");
 }
 
 export function clipSourcePath(p: VideoProject, c: Clip): string {
@@ -212,6 +220,71 @@ export function flattenKind(p: VideoProject, kind: ClipKind): FlatSeg[] {
 
 export function flattenHasGap(segs: FlatSeg[]): boolean {
   return segs.some((s) => s.gap);
+}
+
+export type CompLayer = {
+  sourcePath: string;
+  sourceStart: number;
+  sourceEnd: number;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  srcWidth: number;
+  srcHeight: number;
+};
+
+export type CompSlice = {
+  duration: number;
+  layers: CompLayer[];
+};
+
+function mediaSize(path: string, fallback: MediaInfo, byPath: Record<string, MediaInfo>) {
+  const m = byPath[path] ?? (fallback.path === path ? fallback : fallback);
+  return { w: m.width || 1920, h: m.height || 1080 };
+}
+
+export function flattenCanvas(
+  p: VideoProject,
+  fallback: MediaInfo,
+  byPath: Record<string, MediaInfo> = {},
+): CompSlice[] {
+  const end = timelineDuration(p);
+  if (end <= 0) return [];
+  const marks = new Set<number>([0, end]);
+  for (const c of clipsOn(p, "video")) {
+    marks.add(c.timelineStart);
+    marks.add(clipEnd(c));
+  }
+  const sorted = [...marks].sort((a, b) => a - b);
+  const out: CompSlice[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    if (b - a < 0.01) continue;
+    const mid = (a + b) / 2;
+    const layers: CompLayer[] = [];
+    for (const layer of ["base", "over"] as const) {
+      const c = clipAt(p, mid, "video", layer);
+      if (!c) continue;
+      const path = clipSourcePath(p, c);
+      const size = mediaSize(path, fallback, byPath);
+      const xf: ClipTransform = clipXf(c);
+      layers.push({
+        sourcePath: path,
+        sourceStart: c.sourceStart + (a - c.timelineStart),
+        sourceEnd: c.sourceStart + (b - c.timelineStart),
+        x: xf.x,
+        y: xf.y,
+        scale: xf.scale,
+        rotation: xf.rotation,
+        srcWidth: size.w,
+        srcHeight: size.h,
+      });
+    }
+    out.push({ duration: b - a, layers });
+  }
+  return out;
 }
 
 export function replaceClips(p: VideoProject, clips: Clip[]): VideoProject {

@@ -5,6 +5,7 @@ import type { Clip, ClipKind, ClipboardChunk, MediaInfo, TimeRange, VideoProject
 import { formatTime } from "../core/types";
 import {
   clipAt,
+  flattenCanvas,
   flattenKind,
   fromMedia,
   isTimelineGap,
@@ -13,6 +14,7 @@ import {
   snapStart,
   timelineDuration,
 } from "../core/project";
+import { AR_PRESETS, evenPx, type ClipTransform } from "../core/canvas";
 import {
   UndoStack,
   chunkFromRange,
@@ -101,6 +103,9 @@ type EditorState = {
   togglePlay: () => void;
   setMenuOpen: (v: boolean) => void;
   setProgress: (p: { label: string; pct: number } | null) => void;
+  setCanvas: (w: number, h: number) => void;
+  setCanvasPreset: (id: string) => void;
+  liveTransform: (id: string, xf: ClipTransform) => void;
   exportVideo: () => Promise<void>;
 };
 
@@ -598,6 +603,34 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setViewStart: (t) => set({ viewStart: Math.max(0, t) }),
 
+  setCanvas: (w, h) => {
+    const p = get().project;
+    if (!p) return;
+    const canvasWidth = evenPx(w, p.canvasWidth);
+    const canvasHeight = evenPx(h, p.canvasHeight);
+    set({ project: { ...p, canvasWidth, canvasHeight }, status: `Canvas ${canvasWidth}×${canvasHeight}` });
+    requestAnimationFrame(() => {
+      void fitWindowToVideo(canvasWidth, canvasHeight);
+    });
+  },
+
+  setCanvasPreset: (id) => {
+    const preset = AR_PRESETS.find((x) => x.id === id);
+    if (!preset) return;
+    get().setCanvas(preset.w, preset.h);
+  },
+
+  liveTransform: (id, xf) => {
+    const p = get().project;
+    if (!p) return;
+    set({
+      project: {
+        ...p,
+        clips: p.clips.map((c) => (c.id === id ? { ...c, transform: { ...xf } } : c)),
+      },
+    });
+  },
+
   exportVideo: async () => {
     const { project, media, busy } = get();
     if (!project || !media || busy) return;
@@ -610,13 +643,23 @@ export const useEditor = create<EditorState>((set, get) => ({
     const clips = flattenKind(project, "video");
     const audioClips = flattenKind(project, "audio");
     const videoClips = project.clips.filter((c) => c.kind === "video");
+    const compSlices = flattenCanvas(project, media, get().mediaByPath);
     const hasGap = clips.some((c) => c.gap) || audioClips.some((c) => c.gap);
     const otherFile = clips.some((s) => !s.gap && s.sourcePath !== project.sourcePath);
+    const fancy =
+      compSlices.some((s) => s.layers.length !== 1) ||
+      videoClips.some((c) => {
+        const xf = c.transform;
+        return xf && (xf.x !== 0 || xf.y !== 0 || xf.scale !== 1 || xf.rotation !== 0);
+      }) ||
+      project.canvasWidth !== (media.width || project.canvasWidth) ||
+      project.canvasHeight !== (media.height || project.canvasHeight);
     const mediaOnly = (segs: typeof clips) =>
       segs.filter((s) => !s.gap).map((s) => ({ sourceStart: s.sourceStart, sourceEnd: s.sourceEnd }));
     const useStreamCopy =
       !hasGap &&
       !otherFile &&
+      !fancy &&
       canStreamCopyAllClips(videoClips, media.keyframeTimes, media.frameRate) &&
       mediaOnly(audioClips).length === mediaOnly(clips).length;
     set({
@@ -634,9 +677,10 @@ export const useEditor = create<EditorState>((set, get) => ({
           hasAudio: media.hasAudio,
           videoCodec: media.videoCodec,
           useStreamCopy,
-          width: media.width,
-          height: media.height,
+          width: project.canvasWidth,
+          height: project.canvasHeight,
           frameRate: media.frameRate,
+          compSlices,
         },
       });
       set({ busy: false, progress: null, status: `Saved: ${result.outputPath} · ${result.message}` });
