@@ -49,6 +49,8 @@ export type ClipboardChunk = {
   sourceStart: number;
   sourceEnd: number;
   sourcePath?: string;
+  /** True for Cut: paste once, then clear. Copy stays until replaced. */
+  consume?: boolean;
 };
 
 export type PlaybackKind = "continue" | "jump" | "gap" | "stop";

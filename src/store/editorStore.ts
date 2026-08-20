@@ -527,6 +527,7 @@ export const useEditor = create<EditorState>((set, get) => ({
             sourceStart: c.sourceStart,
             sourceEnd: c.sourceEnd,
             sourcePath: c.sourcePath,
+            consume: false,
           },
           status: "Copied clip",
         });
@@ -538,7 +539,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       set({ status: "Nothing to copy in that range." });
       return;
     }
-    set({ clipboard: chunk, status: `Copied ${chunk.kind} ${formatTime(chunk.sourceEnd - chunk.sourceStart)}` });
+    set({ clipboard: { ...chunk, consume: false }, status: `Copied ${chunk.kind} ${formatTime(chunk.sourceEnd - chunk.sourceStart)}` });
   },
 
   cutOrSlice: () => {
@@ -566,10 +567,10 @@ export const useEditor = create<EditorState>((set, get) => ({
     applyClips(get, set, r.clips, "Cut range");
     const dur = range.end - range.start;
     set({
-      clipboard: chunk,
+      clipboard: chunk ? { ...chunk, consume: true } : null,
       range: null,
       status: chunk
-        ? `Cut ${formatTime(dur)} hole — Ctrl+V pastes at playhead`
+        ? `Cut ${formatTime(dur)} — click paste once to place it`
         : `Cut ${formatTime(dur)} hole`,
     });
   },
@@ -590,10 +591,12 @@ export const useEditor = create<EditorState>((set, get) => ({
     applyClips(get, set, r.clips, "Paste");
     const added = r.clips.find((c) => !p.clips.some((old) => old.id === c.id));
     set({
+      clipboard: clip.consume ? null : get().clipboard,
       selectedId: added?.id ?? get().selectedId,
-      status:
-        added?.layer === "over"
-          ? "Pasted on overlay (2nd layer) — plays on top, then the clip under it"
+      status: clip.consume
+        ? "Pasted cut clip"
+        : added?.layer === "over"
+          ? "Pasted on overlay (2nd layer)"
           : "Pasted on base",
     });
   },
