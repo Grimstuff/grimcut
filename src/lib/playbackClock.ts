@@ -1,5 +1,5 @@
 import { mapTimelineToSource, timelineDuration } from "../core/project";
-import { clipEnd } from "../core/types";
+import { clipEnd, type Clip } from "../core/types";
 import { useEditor } from "../store/editorStore";
 
 const RAF_KEY = "__grimcutPlaybackRaf";
@@ -11,22 +11,38 @@ let videoEl: HTMLVideoElement | null = null;
 let lastWall = 0;
 let lastClipId: string | null = null;
 let fileSeeking = false;
+let seekTarget: number | null = null;
+/** Hide the picture while the decoder rewinds to a previous keyframe (overlay → base). */
+let covering = false;
 
 export function setPreviewVideo(el: HTMLVideoElement | null) {
   videoEl = el;
 }
 
 export function markVideoSeekDone() {
-  fileSeeking = false;
+  const v = videoEl;
+  const st = useEditor.getState();
+  if (st.playing && v && v.paused) playVideo(v, false);
 }
 
-function seekIfNeeded(v: HTMLVideoElement, source: number) {
-  if (!Number.isFinite(v.currentTime) || Math.abs(v.currentTime - source) > 0.05) {
-    fileSeeking = true;
+function sourceInClip(src: number, clip: Clip) {
+  return src >= clip.sourceStart - 0.05 && src < clip.sourceEnd - 0.03;
+}
+
+function seekTo(v: HTMLVideoElement, source: number) {
+  const t = Math.max(0, source);
+  const from = v.currentTime;
+  seekTarget = t;
+  fileSeeking = true;
+  covering = Number.isFinite(from) && from - t > 0.08;
+  if (!v.paused) v.pause();
+  if (!Number.isFinite(from) || Math.abs(from - t) > 0.04) {
     try {
-      v.currentTime = Math.max(0, source);
+      v.currentTime = t;
     } catch {
       fileSeeking = false;
+      covering = false;
+      seekTarget = null;
     }
   }
 }
@@ -57,12 +73,16 @@ export function togglePlayback() {
   if (st.playing) {
     st.setPlaying(false);
     lastWall = 0;
+    covering = false;
+    fileSeeking = false;
     v?.pause();
     return;
   }
 
   lastWall = 0;
+  covering = false;
   fileSeeking = false;
+  seekTarget = null;
   st.setPlaying(true);
 
   const mapped = mapTimelineToSource(st.project, st.playhead);
@@ -73,7 +93,8 @@ export function togglePlayback() {
   }
   lastClipId = mapped.clip.id;
   if (!v) return;
-  seekIfNeeded(v, mapped.source);
+  seekTo(v, mapped.source);
+  covering = false;
   playVideo(v, true);
 }
 
@@ -83,6 +104,7 @@ function tick(now: number) {
 
   if (!st.playing) {
     lastWall = 0;
+    covering = false;
     if (v && !v.paused) v.pause();
     return;
   }
@@ -98,17 +120,41 @@ function tick(now: number) {
   let ph = st.playhead;
   let mapped = mapTimelineToSource(p, ph);
 
-  if (mapped && v && lastClipId === mapped.clip.id && !fileSeeking && !v.paused) {
+  if (v && mapped && (fileSeeking || covering || v.seeking)) {
     const src = v.currentTime;
-    const inClip = src >= mapped.clip.sourceStart - 0.08 && src < mapped.clip.sourceEnd - 0.02;
-    if (inClip) {
+    const target = seekTarget ?? mapped.source;
+    const behind = Number.isFinite(src) && src < target - 0.05;
+    if (behind || v.seeking) {
+      if (behind && v.paused) playVideo(v, false);
       lastWall = now;
+      useEditor.setState({
+        playhead: ph,
+        showBlack: covering || v.seeking,
+        selectedId: mapped.clip.id,
+      });
+      return;
+    }
+    fileSeeking = false;
+    covering = false;
+    seekTarget = null;
+  }
+
+  if (mapped && v && lastClipId === mapped.clip.id && !fileSeeking && !v.paused && !v.seeking) {
+    const src = v.currentTime;
+    if (sourceInClip(src, mapped.clip)) {
       const local = mapped.clip.timelineStart + (src - mapped.clip.sourceStart);
+      if (local + 0.04 < ph) {
+        lastWall = now;
+        if (v.paused) playVideo(v, false);
+        useEditor.setState({ playhead: ph, showBlack: true, selectedId: mapped.clip.id });
+        return;
+      }
+      lastWall = now;
       ph = Math.max(mapped.clip.timelineStart, Math.min(clipEnd(mapped.clip) - 0.0005, local));
       useEditor.setState({ playhead: ph, showBlack: false, selectedId: mapped.clip.id });
       return;
     }
-    // File ran off the end of this timeline clip — jump to the next timeline beat, not the next source frame.
+    if (!v.paused) v.pause();
     ph = clipEnd(mapped.clip);
     lastClipId = null;
   } else if (!mapped) {
@@ -122,6 +168,7 @@ function tick(now: number) {
   if (ph >= end - 0.0005) {
     useEditor.setState({ playhead: end, showBlack: true, playing: false });
     lastWall = 0;
+    covering = false;
     v?.pause();
     return;
   }
@@ -129,21 +176,22 @@ function tick(now: number) {
   mapped = mapTimelineToSource(p, ph);
   if (!mapped) {
     lastClipId = null;
+    covering = false;
+    fileSeeking = false;
     useEditor.setState({ playhead: ph, showBlack: true });
     if (v && !v.paused) v.pause();
     return;
   }
 
-  useEditor.setState({ playhead: ph, showBlack: false, selectedId: mapped.clip.id });
+  useEditor.setState({ playhead: ph, showBlack: covering, selectedId: mapped.clip.id });
   if (!v) return;
 
   if (lastClipId !== mapped.clip.id) {
     lastClipId = mapped.clip.id;
-    seekIfNeeded(v, mapped.source);
-    playVideo(v, false);
+    seekTo(v, mapped.source);
     return;
   }
-  if (v.paused && !fileSeeking) playVideo(v, false);
+  if (v.paused && !fileSeeking && !v.seeking) playVideo(v, false);
 }
 
 export function startPlaybackClock() {

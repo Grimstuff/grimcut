@@ -15,12 +15,8 @@ export function Preview() {
     if (!v) return;
     const clear = () => markVideoSeekDone();
     v.addEventListener("seeked", clear);
-    v.addEventListener("playing", clear);
-    v.addEventListener("canplay", clear);
     return () => {
       v.removeEventListener("seeked", clear);
-      v.removeEventListener("playing", clear);
-      v.removeEventListener("canplay", clear);
     };
   }, [previewUrl]);
 
@@ -58,7 +54,7 @@ export function Preview() {
           if (src != null) v.currentTime = src;
         }}
       />
-      {showBlack ? <div className="black-gap">Gap</div> : null}
+      {showBlack ? <div className="black-gap" /> : null}
     </div>
   );
 }
