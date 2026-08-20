@@ -412,7 +412,7 @@ html.is-live-resize body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 200px;
+  min-height: 176px;
 }
 
 .tl-split {
@@ -432,11 +432,11 @@ html.is-live-resize body {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: 8px 12px 8px;
+  padding: 4px 12px 6px;
   background: var(--gp-surface-elevated);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -447,8 +447,8 @@ html.is-live-resize body {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
-  margin-bottom: 8px;
+  min-height: 32px;
+  margin-bottom: 4px;
   flex-shrink: 0;
   overflow: visible;
 }
@@ -481,14 +481,44 @@ html.is-live-resize body {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 2px 4px;
-  background: var(--gp-surface);
-  border: 1px solid var(--gp-border);
-  border-radius: 8px;
 }
 
 .tb-export-group {
-  padding: 2px;
+  margin-left: 2px;
+}
+
+.tb-vol {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tb-canvas-wrap {
+  position: relative;
+}
+
+.tb-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  min-width: 228px;
+  padding: 10px;
+  background: var(--gp-menu-bg);
+  border: 1px solid var(--gp-border);
+  box-shadow: var(--gp-menu-shadow);
+}
+
+.tb-pop-label {
+  font-size: 11px;
+  color: var(--gp-text-muted);
+  margin-bottom: 8px;
+}
+
+.tb-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .tb-combo {
@@ -586,7 +616,7 @@ html.is-live-resize body {
   color: var(--gp-text);
 }
 
-.tb-group input[type="range"] {
+.tb-vol input[type="range"] {
   width: 72px;
   height: 22px;
   accent-color: var(--gp-accent);
@@ -601,8 +631,8 @@ html.is-live-resize body {
   color: #9ad4ff;
   background: #141416;
   border: 1px solid #2c2c32;
-  border-radius: 7px;
-  padding: 4px 10px 5px;
+  border-radius: 2px;
+  padding: 3px 8px 4px;
   text-shadow: 0 0 10px rgba(120, 190, 255, 0.35);
   min-width: 11.6ch;
   text-align: center;
@@ -618,7 +648,7 @@ html.is-live-resize body {
   border: none;
   background: transparent;
   color: var(--gp-text-secondary);
-  border-radius: 7px;
+  border-radius: 4px;
   cursor: pointer;
 }
 

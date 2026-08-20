@@ -171,7 +171,7 @@ export function Timeline() {
   const peaksByPath = useEditor((s) => s.peaksByPath);
   const mediaByPath = useEditor((s) => s.mediaByPath);
   const dropGhost = useEditor((s) => s.dropGhost);
-  const [tlH, setTlH] = useState(248);
+  const [tlH, setTlH] = useState(192);
   const splitDrag = useRef<{ y: number; h: number } | null>(null);
 
   useEffect(() => {
@@ -368,7 +368,7 @@ export function Timeline() {
           const d = splitDrag.current;
           if (!d) return;
           const max = Math.round(window.innerHeight * 0.72);
-          setTlH(Math.max(200, Math.min(max, d.h - (e.clientY - d.y))));
+          setTlH(Math.max(176, Math.min(max, d.h - (e.clientY - d.y))));
         }}
         onPointerUp={() => {
           splitDrag.current = null;
@@ -397,10 +397,6 @@ export function Timeline() {
           }}
         />
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
-      </div>
-      <div className="timeline-foot">
-        <span>Select · top box moves · drop files onto overlay · Ctrl+X cut · Ctrl+V paste</span>
-        <span>{pps.toFixed(0)} px/s</span>
       </div>
       </div>
     </div>

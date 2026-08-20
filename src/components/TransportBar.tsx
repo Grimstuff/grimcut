@@ -82,6 +82,14 @@ function IconExport() {
     </svg>
   );
 }
+function IconMonitor() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="8.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" d="M8 11v2.2M5.2 13.5h5.6" />
+    </svg>
+  );
+}
 function IconSpeaker({ muted }: { muted: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -118,6 +126,7 @@ export function TransportBar() {
   const range = useEditor((s) => s.range);
   const busy = useEditor((s) => s.busy);
   const volume = useEditor((s) => s.previewVolume);
+  const [canvasOpen, setCanvasOpen] = useState(false);
   const [arOpen, setArOpen] = useState(false);
   const [resOpen, setResOpen] = useState(false);
   const [resText, setResText] = useState("");
@@ -136,6 +145,7 @@ export function TransportBar() {
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
       if (!wrap.current?.contains(e.target as Node)) {
+        setCanvasOpen(false);
         setArOpen(false);
         setResOpen(false);
       }
@@ -163,90 +173,7 @@ export function TransportBar() {
   return (
     <div className="tl-bar" ref={wrap}>
       <div className="tl-bar-left">
-        <div className={`tb-combo${arOpen ? " is-open" : ""}`}>
-          <button
-            type="button"
-            className="tb-combo-face"
-            title="Aspect ratio"
-            onClick={() => {
-              setArOpen((v) => !v);
-              setResOpen(false);
-            }}
-          >
-            <span>{ar}</span>
-            <span className="tb-caret" />
-          </button>
-          {arOpen ? (
-            <div className="tb-menu">
-              {AR_PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={p.id === ar ? "is-on" : ""}
-                  onClick={() => {
-                    setArOpen(false);
-                    if (p.id !== ar) useEditor.getState().setCanvasPreset(p.id);
-                  }}
-                >
-                  {p.id}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-        <div className={`tb-combo${resOpen ? " is-open" : ""}`}>
-          <div className="tb-combo-face">
-            <input
-              className="tb-res-input"
-              value={resText}
-              title="Canvas resolution"
-              onFocus={() => {
-                setResOpen(true);
-                setArOpen(false);
-              }}
-              onChange={(e) => setResText(e.target.value)}
-              onBlur={applyTyped}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  applyTyped();
-                  setResOpen(false);
-                  (e.target as HTMLInputElement).blur();
-                }
-              }}
-            />
-            <button
-              type="button"
-              className="tb-caret-hit"
-              title="Common resolutions"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                setResOpen((v) => !v);
-                setArOpen(false);
-              }}
-            >
-              <span className="tb-caret" />
-            </button>
-          </div>
-          {resOpen ? (
-            <div className="tb-menu tb-menu-wide">
-              {resList.map((r) => (
-                <button
-                  key={r.label}
-                  type="button"
-                  className={r.w === project.canvasWidth && r.h === project.canvasHeight ? "is-on" : ""}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    useEditor.getState().setCanvas(r.w, r.h);
-                    setResOpen(false);
-                  }}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-        <div className="tb-group" title="Preview volume">
+        <div className="tb-vol" title="Preview volume">
           <button
             type="button"
             className="icon-btn"
@@ -280,25 +207,127 @@ export function TransportBar() {
             }}
           />
         </div>
+        <div className="tb-canvas-wrap">
+          <button
+            type="button"
+            className={`icon-btn${canvasOpen ? " is-on" : ""}`}
+            title="Canvas size and aspect ratio"
+            onClick={() => {
+              setCanvasOpen((v) => !v);
+              setArOpen(false);
+              setResOpen(false);
+            }}
+          >
+            <IconMonitor />
+          </button>
+          {canvasOpen ? (
+            <div className="tb-pop">
+              <div className="tb-pop-label">Canvas</div>
+              <div className="tb-pop-row">
+                <div className={`tb-combo${arOpen ? " is-open" : ""}`}>
+                  <button
+                    type="button"
+                    className="tb-combo-face"
+                    title="Aspect ratio"
+                    onClick={() => {
+                      setArOpen((v) => !v);
+                      setResOpen(false);
+                    }}
+                  >
+                    <span>{ar}</span>
+                    <span className="tb-caret" />
+                  </button>
+                  {arOpen ? (
+                    <div className="tb-menu">
+                      {AR_PRESETS.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className={p.id === ar ? "is-on" : ""}
+                          onClick={() => {
+                            setArOpen(false);
+                            if (p.id !== ar) useEditor.getState().setCanvasPreset(p.id);
+                          }}
+                        >
+                          {p.id}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <div className={`tb-combo${resOpen ? " is-open" : ""}`}>
+                  <div className="tb-combo-face">
+                    <input
+                      className="tb-res-input"
+                      value={resText}
+                      title="Canvas resolution"
+                      onFocus={() => {
+                        setResOpen(true);
+                        setArOpen(false);
+                      }}
+                      onChange={(e) => setResText(e.target.value)}
+                      onBlur={applyTyped}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          applyTyped();
+                          setResOpen(false);
+                          (e.target as HTMLInputElement).blur();
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="tb-caret-hit"
+                      title="Common resolutions"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setResOpen((v) => !v);
+                        setArOpen(false);
+                      }}
+                    >
+                      <span className="tb-caret" />
+                    </button>
+                  </div>
+                  {resOpen ? (
+                    <div className="tb-menu tb-menu-wide">
+                      {resList.map((r) => (
+                        <button
+                          key={r.label}
+                          type="button"
+                          className={r.w === project.canvasWidth && r.h === project.canvasHeight ? "is-on" : ""}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            useEditor.getState().setCanvas(r.w, r.h);
+                            setResOpen(false);
+                          }}
+                        >
+                          {r.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="tl-bar-center">
-        <div className="tb-group">
-          <button
-            type="button"
-            className={`icon-btn icon-btn-lg${playing ? " is-on" : ""}`}
-            title="Play / pause (Space)"
-            onClick={() => togglePlayback()}
-          >
-            {playing ? <IconPause /> : <IconPlay />}
-          </button>
-          <div className="lcd" title="Playhead">
-            {lcdTime(playhead)}
-          </div>
-          <button type="button" className="icon-btn icon-btn-lg is-record" title="Record (coming later)" disabled>
-            <IconRecord />
-          </button>
+        <button
+          type="button"
+          className={`icon-btn icon-btn-lg${playing ? " is-on" : ""}`}
+          title="Play / pause (Space)"
+          onClick={() => togglePlayback()}
+        >
+          {playing ? <IconPause /> : <IconPlay />}
+        </button>
+        <div className="lcd" title="Playhead">
+          {lcdTime(playhead)}
         </div>
+        <button type="button" className="icon-btn icon-btn-lg is-record" title="Record (coming later)" disabled>
+          <IconRecord />
+        </button>
       </div>
 
       <div className="tl-bar-right">
