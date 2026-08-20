@@ -680,7 +680,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       compSlices.some((s) => s.layers.length !== 1) ||
       videoClips.some((c) => {
         const xf = c.transform;
-        return xf && (xf.x !== 0 || xf.y !== 0 || xf.scale !== 1 || xf.rotation !== 0);
+        return xf && (xf.x !== 0 || xf.y !== 0 || xf.scale !== 1 || xf.rotation !== 0 || (xf.scaleX != null && xf.scaleX !== xf.scale) || (xf.scaleY != null && xf.scaleY !== xf.scale));
       }) ||
       project.canvasWidth !== (media.width || project.canvasWidth) ||
       project.canvasHeight !== (media.height || project.canvasHeight);

@@ -4,6 +4,9 @@ export type ClipTransform = {
   x: number;
   y: number;
   scale: number;
+  /** Extra stretch; default = `scale` (uniform). */
+  scaleX?: number;
+  scaleY?: number;
   rotation: number;
 };
 
@@ -59,7 +62,15 @@ export function arOf(w: number, h: number): string {
 }
 
 export function defaultTransform(): ClipTransform {
-  return { x: 0, y: 0, scale: 1, rotation: 0 };
+  return { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 };
+}
+
+export function xfScaleX(xf: ClipTransform) {
+  return xf.scaleX ?? xf.scale;
+}
+
+export function xfScaleY(xf: ClipTransform) {
+  return xf.scaleY ?? xf.scale;
 }
 
 export function evenPx(n: number, fallback = 2): number {
@@ -72,12 +83,18 @@ export function clipXf(c: Clip): ClipTransform {
 }
 
 /** Native pixels of the clip, scaled so the whole frame fits the canvas at scale=1. */
-export function containSize(srcW: number, srcH: number, canvasW: number, canvasH: number, scale: number) {
+export function containSize(
+  srcW: number,
+  srcH: number,
+  canvasW: number,
+  canvasH: number,
+  scaleX: number,
+  scaleY = scaleX,
+) {
   const sw = Math.max(1, srcW);
   const sh = Math.max(1, srcH);
   const fit = Math.min(canvasW / sw, canvasH / sh);
-  const s = fit * Math.max(0.02, scale);
-  return { w: sw * s, h: sh * s };
+  return { w: sw * fit * Math.max(0.02, scaleX), h: sh * fit * Math.max(0.02, scaleY), fit };
 }
 
 export function clipDrawRect(
@@ -87,10 +104,67 @@ export function clipDrawRect(
   canvasH: number,
   xf: ClipTransform,
 ) {
-  const { w, h } = containSize(srcW, srcH, canvasW, canvasH, xf.scale);
+  const { w, h } = containSize(srcW, srcH, canvasW, canvasH, xfScaleX(xf), xfScaleY(xf));
   const cx = canvasW / 2 + xf.x;
   const cy = canvasH / 2 + xf.y;
   return { w, h, x: cx - w / 2, y: cy - h / 2, cx, cy, rotation: xf.rotation };
+}
+
+export function canvasGuides(cw: number, ch: number) {
+  return {
+    xs: [0, cw / 3, cw / 2, (2 * cw) / 3, cw],
+    ys: [0, ch / 3, ch / 2, (2 * ch) / 3, ch],
+  };
+}
+
+export function snapTo(v: number, guides: number[], thresh: number): { v: number; hit: number | null } {
+  let best = v;
+  let d = thresh;
+  let hit: number | null = null;
+  for (const g of guides) {
+    const dd = Math.abs(v - g);
+    if (dd <= d) {
+      d = dd;
+      best = g;
+      hit = g;
+    }
+  }
+  return { v: best, hit };
+}
+
+export function snapRotation(deg: number, thresh = 5): number {
+  const targets = [0, 45, 90, 135, 180, -45, -90, -135, -180, 225, 270, 315, 360, -225, -270];
+  let n = deg;
+  while (n > 180) n -= 360;
+  while (n < -180) n += 360;
+  for (const t of targets) {
+    if (Math.abs(n - t) <= thresh) return t === 360 || t === -360 ? 0 : t;
+  }
+  return n;
+}
+
+export function rectToTransform(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  canvasW: number,
+  canvasH: number,
+  srcW: number,
+  srcH: number,
+  rotation: number,
+): ClipTransform {
+  const { fit } = containSize(srcW, srcH, canvasW, canvasH, 1, 1);
+  const scaleX = w / (srcW * fit);
+  const scaleY = h / (srcH * fit);
+  return {
+    x: left + w / 2 - canvasW / 2,
+    y: top + h / 2 - canvasH / 2,
+    scale: (scaleX + scaleY) / 2,
+    scaleX,
+    scaleY,
+    rotation,
+  };
 }
 
 export function pointInRotatedRect(

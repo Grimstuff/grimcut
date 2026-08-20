@@ -1,18 +1,41 @@
 import { useEffect, useRef, useState, type PointerEvent as RE } from "react";
 import { clipAt, clipSourcePath } from "../core/project";
-import { clipDrawRect, clipXf, pointInRotatedRect } from "../core/canvas";
+import {
+  canvasGuides,
+  clipDrawRect,
+  clipXf,
+  pointInRotatedRect,
+  rectToTransform,
+  snapRotation,
+  snapTo,
+} from "../core/canvas";
 import { useEditor } from "../store/editorStore";
 import { markVideoSeekDone, setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead } from "../lib/playbackClock";
 import type { Clip } from "../core/types";
 
+type Corner = "nw" | "ne" | "sw" | "se";
+
 type CanvasDrag =
   | { kind: "pan"; x: number; y: number; vx: number; vy: number }
   | { kind: "move"; id: string; x0: number; y0: number; px: number; py: number; before: ReturnType<typeof snapshotClips> }
-  | { kind: "scale"; id: string; scale0: number; dist0: number; before: ReturnType<typeof snapshotClips> }
-  | { kind: "rotate"; id: string; rot0: number; ang0: number; before: ReturnType<typeof snapshotClips> };
+  | { kind: "scale"; id: string; corner: Corner; ax: number; ay: number; rot: number; before: ReturnType<typeof snapshotClips> }
+  | { kind: "rotate"; id: string; rot0: number; ang0: number; typed: string; before: ReturnType<typeof snapshotClips> };
 
 function snapshotClips() {
   return useEditor.getState().snapshot() ?? [];
+}
+
+function cornerAnchor(rect: { x: number; y: number; w: number; h: number }, corner: Corner) {
+  switch (corner) {
+    case "se":
+      return { ax: rect.x, ay: rect.y };
+    case "sw":
+      return { ax: rect.x + rect.w, ay: rect.y };
+    case "ne":
+      return { ax: rect.x, ay: rect.y + rect.h };
+    case "nw":
+      return { ax: rect.x + rect.w, ay: rect.y + rect.h };
+  }
 }
 
 function srcSize(clip: Clip) {
@@ -30,6 +53,10 @@ export function Preview() {
   const overRef = useRef<HTMLVideoElement>(null);
   const drag = useRef<CanvasDrag | null>(null);
   const [view, setView] = useState({ z: 1, x: 0, y: 0 });
+  const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
+  const [rotHud, setRotHud] = useState<number | null>(null);
+  const [rotText, setRotText] = useState("");
+  const rotBefore = useRef<ReturnType<typeof snapshotClips> | null>(null);
   const previewUrl = useEditor((s) => s.previewUrl);
   const overlayUrl = useEditor((s) => s.overlayUrl);
   const pickOpen = useEditor((s) => s.pickOpen);
@@ -82,11 +109,47 @@ export function Preview() {
   }, [previewUrl]);
 
   useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const d = drag.current;
+      if (!d || d.kind !== "rotate") return;
+      if (e.key === "Escape") {
+        d.typed = "";
+        return;
+      }
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        d.typed = d.typed.slice(0, -1);
+        const n = Number.parseFloat(d.typed);
+        if (Number.isFinite(n)) {
+          useEditor.getState().liveTransform(d.id, { ...clipXf(useEditor.getState().project?.clips.find((c) => c.id === d.id)!), rotation: n });
+          setRotHud(n);
+        }
+        return;
+      }
+      if (e.key === "-" || e.key === "." || (e.key >= "0" && e.key <= "9")) {
+        e.preventDefault();
+        d.typed += e.key;
+        const n = Number.parseFloat(d.typed);
+        if (Number.isFinite(n)) {
+          const p = useEditor.getState().project;
+          const clip = p?.clips.find((c) => c.id === d.id);
+          if (clip) {
+            useEditor.getState().liveTransform(d.id, { ...clipXf(clip), rotation: n });
+            setRotHud(n);
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  useEffect(() => {
     const el = viewRef.current;
     if (!el || !project) return;
     const fit = () => {
       const r = el.getBoundingClientRect();
-      const pad = 28;
+      const pad = 56;
       const z = Math.min((r.width - pad) / project.canvasWidth, (r.height - pad) / project.canvasHeight);
       setView({ z: Math.max(0.05, z), x: (r.width - project.canvasWidth * z) / 2, y: (r.height - project.canvasHeight * z) / 2 });
     };
@@ -153,16 +216,28 @@ export function Preview() {
         id: selectedLive.id,
         rot0: clipXf(selectedLive).rotation,
         ang0: Math.atan2(pt.y - rect.cy, pt.x - rect.cx),
+        typed: "",
         before: snapshotClips(),
       };
+      setRotHud(clipXf(selectedLive).rotation);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
-    if (t.closest(".bbox-handle") && selectedLive) {
+    const handle = t.closest(".bbox-handle") as HTMLElement | null;
+    if (handle && selectedLive) {
+      const corner = (handle.dataset.corner ?? "se") as Corner;
       const sz = srcSize(selectedLive);
       const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(selectedLive));
-      const dist0 = Math.hypot(pt.x - rect.cx, pt.y - rect.cy) || 1;
-      drag.current = { kind: "scale", id: selectedLive.id, scale0: clipXf(selectedLive).scale, dist0, before: snapshotClips() };
+      const a = cornerAnchor(rect, corner);
+      drag.current = {
+        kind: "scale",
+        id: selectedLive.id,
+        corner,
+        ax: a.ax,
+        ay: a.ay,
+        rot: rect.rotation,
+        before: snapshotClips(),
+      };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
@@ -188,24 +263,101 @@ export function Preview() {
     const clip = p?.clips.find((c) => c.id === d.id);
     if (!p || !clip) return;
     const xf = clipXf(clip);
+    const g = canvasGuides(cw, ch);
+    const thresh = Math.max(4, 10 / view.z);
+    const xs: number[] = [];
+    const ys: number[] = [];
     if (d.kind === "move") {
-      useEditor.getState().liveTransform(d.id, { ...xf, x: d.x0 + (pt.x - d.px), y: d.y0 + (pt.y - d.py) });
-    } else if (d.kind === "scale") {
       const sz = srcSize(clip);
       const rect = clipDrawRect(sz.w, sz.h, cw, ch, xf);
-      const dist = Math.hypot(pt.x - rect.cx, pt.y - rect.cy);
-      useEditor.getState().liveTransform(d.id, { ...xf, scale: Math.max(0.05, Math.min(8, d.scale0 * (dist / d.dist0))) });
+      let left = rect.x + (pt.x - d.px);
+      let top = rect.y + (pt.y - d.py);
+      const sl = snapTo(left, g.xs, thresh);
+      const sr = snapTo(left + rect.w, g.xs, thresh);
+      const scx = snapTo(left + rect.w / 2, g.xs, thresh);
+      const st = snapTo(top, g.ys, thresh);
+      const sb = snapTo(top + rect.h, g.ys, thresh);
+      const scy = snapTo(top + rect.h / 2, g.ys, thresh);
+      if (sl.hit != null) {
+        left = sl.v;
+        xs.push(sl.hit);
+      } else if (sr.hit != null) {
+        left = sr.v - rect.w;
+        xs.push(sr.hit);
+      } else if (scx.hit != null) {
+        left = scx.v - rect.w / 2;
+        xs.push(scx.hit);
+      }
+      if (st.hit != null) {
+        top = st.v;
+        ys.push(st.hit);
+      } else if (sb.hit != null) {
+        top = sb.v - rect.h;
+        ys.push(sb.hit);
+      } else if (scy.hit != null) {
+        top = scy.v - rect.h / 2;
+        ys.push(scy.hit);
+      }
+      setGuides({ xs, ys });
+      useEditor.getState().liveTransform(d.id, {
+        ...xf,
+        x: left + rect.w / 2 - cw / 2,
+        y: top + rect.h / 2 - ch / 2,
+      });
+    } else if (d.kind === "scale") {
+      const sz = srcSize(clip);
+      let mx = pt.x;
+      let my = pt.y;
+      const sx = snapTo(mx, g.xs, thresh);
+      const sy = snapTo(my, g.ys, thresh);
+      if (sx.hit != null) {
+        mx = sx.v;
+        xs.push(sx.hit);
+      }
+      if (sy.hit != null) {
+        my = sy.v;
+        ys.push(sy.hit);
+      }
+      let w = Math.max(4, Math.abs(mx - d.ax));
+      let h = Math.max(4, Math.abs(my - d.ay));
+      const free = e.shiftKey;
+      if (!free) {
+        const ar = sz.w / sz.h;
+        if (w / h > ar) h = w / ar;
+        else w = h * ar;
+      }
+      const left = mx < d.ax ? d.ax - w : d.ax;
+      const top = my < d.ay ? d.ay - h : d.ay;
+      const el = snapTo(left, g.xs, thresh);
+      const er = snapTo(left + w, g.xs, thresh);
+      const et = snapTo(top, g.ys, thresh);
+      const eb = snapTo(top + h, g.ys, thresh);
+      if (el.hit != null) xs.push(el.hit);
+      if (er.hit != null) xs.push(er.hit);
+      if (et.hit != null) ys.push(et.hit);
+      if (eb.hit != null) ys.push(eb.hit);
+      setGuides({ xs, ys });
+      useEditor.getState().liveTransform(
+        d.id,
+        rectToTransform(left, top, w, h, cw, ch, sz.w, sz.h, d.rot),
+      );
     } else if (d.kind === "rotate") {
+      if (d.typed) return;
       const sz = srcSize(clip);
       const rect = clipDrawRect(sz.w, sz.h, cw, ch, xf);
       const ang = Math.atan2(pt.y - rect.cy, pt.x - rect.cx);
-      useEditor.getState().liveTransform(d.id, { ...xf, rotation: d.rot0 + ((ang - d.ang0) * 180) / Math.PI });
+      const raw = d.rot0 + ((ang - d.ang0) * 180) / Math.PI;
+      const rotation = snapRotation(raw, 6);
+      setRotHud(rotation);
+      useEditor.getState().liveTransform(d.id, { ...xf, rotation });
     }
   };
 
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
+    setGuides({ xs: [], ys: [] });
+    setRotHud(null);
     if (d && d.kind !== "pan") useEditor.getState().commit(d.before, "Transform");
   };
 
@@ -236,7 +388,7 @@ export function Preview() {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        title="Wheel zoom · Alt-drag pan · click a clip to transform"
+        title="Wheel zoom · Alt-drag pan · Shift+scale to stretch"
       >
         <div className="canvas-space" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}>
           <div className="canvas-stage" style={{ width: cw, height: ch }}>
@@ -266,6 +418,13 @@ export function Preview() {
               disablePictureInPicture
               style={placeVideo(overClip)}
             />
+          </div>
+            {guides.xs.map((x) => (
+              <div key={`x${x}`} className="snap-guide v" style={{ left: x, height: ch }} />
+            ))}
+            {guides.ys.map((y) => (
+              <div key={`y${y}`} className="snap-guide h" style={{ top: y, width: cw }} />
+            ))}
             {bbox ? (
               <div
                 className="bbox"
@@ -277,14 +436,53 @@ export function Preview() {
                   transform: `rotate(${bbox.rotation}deg)`,
                 }}
               >
-                <span className="bbox-rot" title="Rotate" />
-                <span className="bbox-handle nw" />
-                <span className="bbox-handle ne" />
-                <span className="bbox-handle sw" />
-                <span className="bbox-handle se" />
+                <span className="bbox-rot" title="Rotate — drag, or type degrees" />
+                <span className="bbox-handle nw" data-corner="nw" />
+                <span className="bbox-handle ne" data-corner="ne" />
+                <span className="bbox-handle sw" data-corner="sw" />
+                <span className="bbox-handle se" data-corner="se" />
               </div>
             ) : null}
-          </div>
+            {bbox && rotHud != null ? (
+              <div
+                className="rot-hud"
+                style={{
+                  left: bbox.cx,
+                  top: bbox.cy,
+                  transform: `translate(-50%, -120%) scale(${1 / view.z})`,
+                }}
+              >
+                {rotHud.toFixed(1)}°
+              </div>
+            ) : null}
+            {bbox && selectedLive && rotHud == null ? (
+              <input
+                className="rot-input"
+                title="Rotation in degrees"
+                value={rotText || String(Math.round(clipXf(selectedLive).rotation * 10) / 10)}
+                onPointerDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  setRotText(e.target.value);
+                  const n = Number.parseFloat(e.target.value);
+                  if (!Number.isFinite(n) || !selectedLive) return;
+                  useEditor.getState().liveTransform(selectedLive.id, { ...clipXf(selectedLive), rotation: n });
+                }}
+                onBlur={() => {
+                  if (rotBefore.current) useEditor.getState().commit(rotBefore.current, "Rotate");
+                  rotBefore.current = null;
+                  setRotText("");
+                }}
+                onFocus={() => {
+                  rotBefore.current = snapshotClips();
+                  if (selectedLive) setRotText(String(Math.round(clipXf(selectedLive).rotation * 10) / 10));
+                }}
+                style={{
+                  left: bbox.cx,
+                  top: bbox.y - 36,
+                  transform: `translate(-50%, 0) scale(${1 / view.z})`,
+                }}
+              />
+            ) : null}
         </div>
       </div>
       <div className="canvas-meta">

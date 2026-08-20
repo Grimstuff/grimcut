@@ -301,39 +301,86 @@ html.is-live-resize body {
 .bbox-handle {
   pointer-events: auto;
   position: absolute;
-  width: 8px;
-  height: 8px;
+  width: 14px;
+  height: 14px;
   background: #fff;
-  border: 1px solid #2a6cb0;
+  border: 1.5px solid #2a6cb0;
   box-sizing: border-box;
 }
 
-.bbox-handle.nw { left: -4px; top: -4px; cursor: nwse-resize; }
-.bbox-handle.ne { right: -4px; top: -4px; cursor: nesw-resize; }
-.bbox-handle.sw { left: -4px; bottom: -4px; cursor: nesw-resize; }
-.bbox-handle.se { right: -4px; bottom: -4px; cursor: nwse-resize; }
+.bbox-handle.nw { left: -7px; top: -7px; cursor: nwse-resize; }
+.bbox-handle.ne { right: -7px; top: -7px; cursor: nesw-resize; }
+.bbox-handle.sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.bbox-handle.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
 
 .bbox-rot {
   pointer-events: auto;
   position: absolute;
   left: 50%;
-  top: -22px;
-  width: 10px;
-  height: 10px;
-  margin-left: -5px;
+  top: -32px;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
   border-radius: 50%;
   background: #5eb0ff;
   cursor: grab;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
 }
 
 .bbox-rot::after {
   content: "";
   position: absolute;
-  left: 4px;
-  top: 10px;
-  width: 1px;
-  height: 12px;
+  left: 7px;
+  top: 16px;
+  width: 2px;
+  height: 16px;
   background: #5eb0ff;
+}
+
+.snap-guide {
+  position: absolute;
+  pointer-events: none;
+  z-index: 6;
+  background: #ff5e8a;
+  opacity: 0.85;
+}
+
+.snap-guide.v {
+  top: 0;
+  width: 1px;
+}
+
+.snap-guide.h {
+  left: 0;
+  height: 1px;
+}
+
+.rot-hud,
+.rot-input {
+  position: absolute;
+  z-index: 8;
+  pointer-events: none;
+  transform-origin: center center;
+}
+
+.rot-hud {
+  color: #9ad4ff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px #000;
+  white-space: nowrap;
+}
+
+.rot-input {
+  pointer-events: auto;
+  width: 4.5rem;
+  height: 22px;
+  border: 1px solid #5eb0ff;
+  background: #141416;
+  color: #9ad4ff;
+  font-size: 12px;
+  text-align: center;
+  padding: 0 4px;
 }
 
 .canvas-meta {

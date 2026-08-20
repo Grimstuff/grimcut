@@ -1,4 +1,4 @@
-import { clipXf, evenPx, type ClipTransform } from "./canvas";
+import { clipXf, evenPx, xfScaleX, xfScaleY, type ClipTransform } from "./canvas";
 import {
   type Clip,
   type ClipKind,
@@ -250,6 +250,8 @@ export type CompLayer = {
   x: number;
   y: number;
   scale: number;
+  scaleX: number;
+  scaleY: number;
   rotation: number;
   srcWidth: number;
   srcHeight: number;
@@ -298,6 +300,8 @@ export function flattenCanvas(
         x: xf.x,
         y: xf.y,
         scale: xf.scale,
+        scaleX: xfScaleX(xf),
+        scaleY: xfScaleY(xf),
         rotation: xf.rotation,
         srcWidth: size.w,
         srcHeight: size.h,

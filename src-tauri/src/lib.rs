@@ -53,6 +53,10 @@ pub struct CompLayerDto {
     #[serde(default = "default_one")]
     pub scale: f64,
     #[serde(default)]
+    pub scale_x: Option<f64>,
+    #[serde(default)]
+    pub scale_y: Option<f64>,
+    #[serde(default)]
     pub rotation: f64,
     #[serde(default)]
     pub src_width: i32,
@@ -800,13 +804,13 @@ fn clip_input_index(inputs: &[String], plan: &ExportPlan, clip: &ClipDto) -> usi
     inputs.iter().position(|p| p == src).unwrap_or(0)
 }
 
-fn contain_wh(src_w: i32, src_h: i32, canvas_w: i32, canvas_h: i32, scale: f64) -> (i32, i32) {
+fn contain_wh(src_w: i32, src_h: i32, canvas_w: i32, canvas_h: i32, scale_x: f64, scale_y: f64) -> (i32, i32) {
     let sw = src_w.max(2) as f64;
     let sh = src_h.max(2) as f64;
-    let fit = (canvas_w as f64 / sw).min(canvas_h as f64 / sh) * scale.max(0.02);
+    let fit = (canvas_w as f64 / sw).min(canvas_h as f64 / sh);
     (
-        even_dim((sw * fit) as i32, 2),
-        even_dim((sh * fit) as i32, 2),
+        even_dim((sw * fit * scale_x.max(0.02)) as i32, 2),
+        even_dim((sh * fit * scale_y.max(0.02)) as i32, 2),
     )
 }
 
@@ -838,7 +842,9 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
                 .unwrap_or(0);
             let start = layer.source_start.max(0.0);
             let end = layer.source_end.max(start + 0.02);
-            let (dw, dh) = contain_wh(layer.src_width, layer.src_height, w, h, layer.scale);
+            let sx = layer.scale_x.unwrap_or(layer.scale);
+            let sy = layer.scale_y.unwrap_or(layer.scale);
+            let (dw, dh) = contain_wh(layer.src_width, layer.src_height, w, h, sx, sy);
             let lab = format!("l{i}_{j}");
             let rot = layer.rotation;
             if rot.abs() > 0.05 {
