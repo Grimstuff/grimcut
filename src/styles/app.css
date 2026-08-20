@@ -470,6 +470,15 @@ html.is-live-resize body {
   border-color: #b4e05a;
 }
 
+.drop-ghost {
+  pointer-events: none;
+  opacity: 0.78;
+  outline: 1px dashed rgba(255, 220, 200, 0.95);
+  outline-offset: -1px;
+  z-index: 6;
+  filter: saturate(1.15);
+}
+
 .layer-tag {
   position: absolute;
   left: 10px;

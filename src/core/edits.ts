@@ -237,9 +237,7 @@ export function tryPaste(
 
   const clips = p.clips.map(cloneClip);
   if (layer === "over") {
-    // One overlay (2nd layer) per kind — replacing any existing overlay on that track.
-    const rest = clips.filter((c) => !(c.kind === chunk.kind && c.layer === "over"));
-    rest.push({
+    clips.push({
       id: newId(),
       kind: chunk.kind,
       layer: "over",
@@ -249,7 +247,7 @@ export function tryPaste(
       linkGroup: null,
       sourcePath: chunk.sourcePath,
     });
-    return { ok: true, clips: rest };
+    return { ok: true, clips };
   }
   clips.push({
     id: newId(),
@@ -281,14 +279,14 @@ export function chunkFromRange(
   return { kind, sourceStart: srcA, sourceEnd: srcB, sourcePath: c.sourcePath };
 }
 
-/** Place a second media file on overlay (2nd layer) at `at`. Replaces any existing overlay. */
+/** Place a media file on overlay (2nd layer) at `at`. Keeps existing overlay clips. */
 export function tryAddOverlayFromMedia(p: VideoProject, info: MediaInfo, at: number): EditResult {
   const duration = info.duration > 0 ? info.duration : 0;
   if (duration < MIN_CLIP) return { ok: false, error: "That file is too short." };
   const start = Math.max(0, at);
   const other = info.path !== p.sourcePath ? info.path : undefined;
   const group = newId();
-  const clips = p.clips.filter((c) => c.layer !== "over");
+  const clips = p.clips.map(cloneClip);
   clips.push({
     id: newId(),
     kind: "video",

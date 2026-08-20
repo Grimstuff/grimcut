@@ -60,12 +60,13 @@ export function clipAt(
   kind: ClipKind,
   layer?: ClipLayer,
 ): Clip | null {
-  const list = clipsOn(p, kind, layer);
-  // Overlay wins if no layer specified
   if (!layer) {
-    const over = list.find((c) => c.layer === "over" && t >= c.timelineStart && t < clipEnd(c));
-    if (over) return over;
+    for (let i = p.clips.length - 1; i >= 0; i--) {
+      const c = p.clips[i];
+      if (c.kind === kind && c.layer === "over" && t >= c.timelineStart && t < clipEnd(c)) return c;
+    }
   }
+  const list = clipsOn(p, kind, layer);
   return list.find((c) => t >= c.timelineStart && t < clipEnd(c)) ?? null;
 }
 

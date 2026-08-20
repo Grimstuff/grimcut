@@ -61,6 +61,10 @@ describe("timeline model", () => {
     expect(r.clips.filter((c) => c.layer === "over")).toHaveLength(2);
     const at = mapTimelineToSource({ ...p, clips: r.clips }, 2.5);
     expect(at?.clip.sourcePath).toBe("C:/b.mp4");
+    const again = tryAddOverlayFromMedia({ ...p, clips: r.clips }, { ...extra, path: "C:/c.mp4", duration: 2 }, 6);
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.clips.filter((c) => c.layer === "over" && c.kind === "video")).toHaveLength(2);
   });
 
   it("flatten uses overlay over base, then the clip underneath", () => {

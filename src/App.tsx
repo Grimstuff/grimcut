@@ -3,7 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { AppChrome } from "./components/AppChrome";
 import { Preview } from "./components/Preview";
-import { Timeline } from "./components/Timeline";
+import { dropClientX, Timeline, timelineTimeAt } from "./components/Timeline";
 import { BusyOverlay } from "./components/BusyOverlay";
 import { useEditor } from "./store/editorStore";
 import { pushAspectLock } from "./lib/fitWindow";
@@ -12,7 +12,6 @@ import { startHotkeys } from "./lib/hotkeys";
 
 export default function App() {
   const status = useEditor((s) => s.status);
-  const dropFile = useEditor((s) => s.dropFile);
   const setProgress = useEditor((s) => s.setProgress);
   const mediaW = useEditor((s) => s.media?.width ?? 0);
   const mediaH = useEditor((s) => s.media?.height ?? 0);
@@ -24,10 +23,31 @@ export default function App() {
     (async () => {
       try {
         const webview = getCurrentWebview();
+        let hoverPath = "";
         unlistenDrop = await webview.onDragDropEvent((event) => {
+          const st = useEditor.getState();
+          if (event.payload.type === "leave") {
+            hoverPath = "";
+            st.clearDropGhost();
+            return;
+          }
+          const x = dropClientX(event.payload.position.x);
+          const t = timelineTimeAt(x);
+          if (event.payload.type === "enter") {
+            hoverPath = event.payload.paths[0] ?? "";
+            if (!st.project) return;
+            if (hoverPath) st.hoverDrop(hoverPath, t);
+            return;
+          }
+          if (event.payload.type === "over") {
+            if (!st.project || !hoverPath) return;
+            st.hoverDrop(hoverPath, t);
+            return;
+          }
           if (event.payload.type === "drop") {
-            const p = event.payload.paths[0];
-            if (p) void dropFile(p);
+            const p = event.payload.paths[0] ?? hoverPath;
+            hoverPath = "";
+            if (p) void st.dropFile(p, t);
           }
         });
       } catch {
@@ -48,7 +68,7 @@ export default function App() {
       unlistenDrop?.();
       unlistenProg?.();
     };
-  }, [dropFile, setProgress]);
+  }, [setProgress]);
 
   useEffect(() => startPlaybackClock(), []);
   useEffect(() => {

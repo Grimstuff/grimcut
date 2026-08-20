@@ -30,8 +30,14 @@ export function setOverlayVideo(el: HTMLVideoElement | null) {
 
 function videoFor(p: VideoProject, clip: Clip): HTMLVideoElement | null {
   const path = clipSourcePath(p, clip);
-  if (path !== p.sourcePath && overlayEl) return overlayEl;
-  return videoEl;
+  if (path === p.sourcePath) return videoEl;
+  if (!overlayEl) return videoEl;
+  const url = useEditor.getState().previewByPath[path];
+  if (url && overlayEl.dataset.mediaPath !== path) {
+    overlayEl.dataset.mediaPath = path;
+    overlayEl.src = url;
+  }
+  return overlayEl;
 }
 
 function pauseAll() {

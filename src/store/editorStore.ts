@@ -29,6 +29,20 @@ import { canStreamCopyAllClips, snapToKeyframe } from "../core/keyframes";
 import { fitWindowToVideo } from "../lib/fitWindow";
 
 const history = new UndoStack();
+const VIDEO_RE = /\.(mp4|mkv|mov|avi|webm|m4v|wmv)$/i;
+
+export type DropGhost = {
+  path: string;
+  name: string;
+  duration: number;
+  start: number;
+  hasAudio: boolean;
+  probing: boolean;
+};
+
+function fileName(path: string) {
+  return path.split(/[/\\]/).pop() ?? path;
+}
 
 type EditorState = {
   project: VideoProject | null;
@@ -41,6 +55,10 @@ type EditorState = {
   overlayUrl: string | null;
   overlayPeaks: number[];
   overlayMedia: MediaInfo | null;
+  peaksByPath: Record<string, number[]>;
+  mediaByPath: Record<string, MediaInfo>;
+  previewByPath: Record<string, string>;
+  dropGhost: DropGhost | null;
   previewOver: boolean;
   showBlack: boolean;
   canUndo: boolean;
@@ -56,8 +74,10 @@ type EditorState = {
   menuOpen: boolean;
   progress: { label: string; pct: number } | null;
   openPath: (path: string) => Promise<void>;
-  dropFile: (path: string) => Promise<void>;
-  addOverlay: (path: string) => Promise<void>;
+  dropFile: (path: string, at?: number) => Promise<void>;
+  addOverlay: (path: string, at?: number) => Promise<void>;
+  hoverDrop: (path: string, start: number) => void;
+  clearDropGhost: () => void;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
   setPlayhead: (t: number) => number | null;
@@ -112,6 +132,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   overlayUrl: null,
   overlayPeaks: [],
   overlayMedia: null,
+  peaksByPath: {},
+  mediaByPath: {},
+  previewByPath: {},
+  dropGhost: null,
   previewOver: false,
   showBlack: false,
   canUndo: false,
@@ -178,6 +202,10 @@ export const useEditor = create<EditorState>((set, get) => ({
           overlayUrl: null,
           overlayPeaks: [],
           overlayMedia: null,
+          peaksByPath: media.hasAudio ? { [path]: peaks } : {},
+          mediaByPath: { [path]: media },
+          previewByPath: { [path]: previewUrl },
+          dropGhost: null,
           previewOver: false,
           showBlack: false,
           busy: false,
@@ -209,40 +237,90 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (typeof path === "string") await get().openPath(path);
   },
 
-  dropFile: async (path) => {
-    if (!/\.(mp4|mkv|mov|avi|webm|m4v|wmv)$/i.test(path)) {
-      set({ status: "Drop a video file." });
+  dropFile: async (path, at) => {
+    if (!VIDEO_RE.test(path)) {
+      set({ status: "Drop a video file.", dropGhost: null });
       return;
     }
-    if (get().project) await get().addOverlay(path);
+    const start = at ?? get().dropGhost?.start ?? get().playhead;
+    set({ dropGhost: null });
+    if (get().project) await get().addOverlay(path, start);
     else await get().openPath(path);
   },
 
-  addOverlay: async (path) => {
+  hoverDrop: (path, start) => {
+    if (!get().project || !VIDEO_RE.test(path)) return;
+    const t = Math.max(0, start);
+    const prev = get().dropGhost;
+    const name = fileName(path);
+    const cached = get().mediaByPath[path];
+    if (prev?.path === path) {
+      if (Math.abs(prev.start - t) < 0.008 && !prev.probing) return;
+      set({
+        dropGhost: { ...prev, start: t },
+        status: `Overlay ${name} · ${formatTime(prev.duration || 0)} at ${formatTime(t)}`,
+      });
+      return;
+    }
+    set({
+      dropGhost: {
+        path,
+        name,
+        duration: cached?.duration ?? 0,
+        start: t,
+        hasAudio: cached?.hasAudio ?? true,
+        probing: !cached,
+      },
+      status: cached ? `Overlay ${name} · ${formatTime(cached.duration)} at ${formatTime(t)}` : `Reading ${name}…`,
+    });
+    if (cached) return;
+    void (async () => {
+      try {
+        const media = await invoke<MediaInfo>("probe", { path });
+        const g = get().dropGhost;
+        if (!g || g.path !== path) return;
+        set({
+          mediaByPath: { ...get().mediaByPath, [path]: media },
+          dropGhost: { ...g, duration: media.duration, hasAudio: media.hasAudio, probing: false },
+          status: `Overlay ${name} · ${formatTime(media.duration)} at ${formatTime(g.start)}`,
+        });
+      } catch {
+        const g = get().dropGhost;
+        if (g?.path === path) set({ dropGhost: { ...g, probing: false }, status: `Couldn’t read ${name}` });
+      }
+    })();
+  },
+
+  clearDropGhost: () => {
+    if (get().dropGhost) set({ dropGhost: null });
+  },
+
+  addOverlay: async (path, at) => {
     const p = get().project;
     if (!p) {
       await get().openPath(path);
       return;
     }
-    set({ busy: true, progress: { label: "Reading overlay…", pct: 12 }, status: "Adding overlay…" });
+    const start = Math.max(0, at ?? get().dropGhost?.start ?? get().playhead);
+    set({ busy: true, progress: { label: "Importing overlay…", pct: 12 }, dropGhost: null, status: "Adding overlay…" });
     try {
-      const media = await invoke<MediaInfo>("probe", { path });
-      const at = get().playhead;
-      const r = tryAddOverlayFromMedia(p, media, at);
+      let media = get().mediaByPath[path];
+      if (!media) media = await invoke<MediaInfo>("probe", { path });
+      const r = tryAddOverlayFromMedia(get().project!, media, start);
       if (!r.ok) {
         set({ busy: false, progress: null, status: r.error });
         return;
       }
-      let overlayUrl = convertFileSrc(path);
-      if (!/\.(mp4|m4v|webm|mov)$/i.test(path)) {
+      let overlayUrl = get().previewByPath[path] ?? convertFileSrc(path);
+      if (!get().previewByPath[path] && !/\.(mp4|m4v|webm|mov)$/i.test(path)) {
         try {
           overlayUrl = convertFileSrc(await invoke<string>("make_proxy", { path }));
         } catch {
           /* native */
         }
       }
-      let overlayPeaks: number[] = [];
-      if (media.hasAudio) {
+      let overlayPeaks = get().peaksByPath[path] ?? [];
+      if (media.hasAudio && overlayPeaks.length === 0) {
         set({ progress: { label: "Overlay waveform…", pct: 55 } });
         try {
           overlayPeaks = await invoke<number[]>("waveform", { path });
@@ -250,19 +328,23 @@ export const useEditor = create<EditorState>((set, get) => ({
           overlayPeaks = [];
         }
       }
-      const over = r.clips.find((c) => c.layer === "over" && c.kind === "video");
+      const over = [...r.clips].reverse().find((c) => c.layer === "over" && c.kind === "video");
       applyClips(get, set, r.clips, "Overlay (2nd layer)");
       set({
         overlayUrl,
         overlayPeaks,
         overlayMedia: media,
+        peaksByPath: { ...get().peaksByPath, [path]: overlayPeaks },
+        mediaByPath: { ...get().mediaByPath, [path]: media },
+        previewByPath: { ...get().previewByPath, [path]: overlayUrl },
         selectedId: over?.id ?? get().selectedId,
         busy: false,
         progress: null,
-        status: `Overlay: ${path.split(/[/\\]/).pop()} at ${formatTime(at)} — trim or move the 2nd layer`,
+        dropGhost: null,
+        status: `Overlay: ${fileName(path)} at ${formatTime(start)}`,
       });
     } catch (e) {
-      set({ busy: false, progress: null, status: String(e) });
+      set({ busy: false, progress: null, dropGhost: null, status: String(e) });
     }
   },
 
@@ -278,6 +360,10 @@ export const useEditor = create<EditorState>((set, get) => ({
         overlayUrl: null,
         overlayPeaks: [],
         overlayMedia: null,
+        peaksByPath: {},
+        mediaByPath: {},
+        previewByPath: {},
+        dropGhost: null,
         previewOver: false,
         showBlack: false,
         peaks: [],

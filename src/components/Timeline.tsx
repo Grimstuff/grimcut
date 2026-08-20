@@ -48,6 +48,19 @@ function timeAt(clientX: number, frozen?: { pps: number; total: number }) {
   return Math.max(0, Math.min(m.total, x / m.pps));
 }
 
+/** Unclamped — drop ghosts can land past the current ruler. */
+export function timelineTimeAt(clientX: number) {
+  const el = scrollerEl;
+  if (!el) return 0;
+  const x = clientX - el.getBoundingClientRect().left + el.scrollLeft - GUTTER;
+  return Math.max(0, x / Math.max(metrics.pps, 0.001));
+}
+
+export function dropClientX(physicalX: number) {
+  const dpr = window.devicePixelRatio || 1;
+  return physicalX / dpr;
+}
+
 function finishDrag() {
   const d = drag;
   drag = null;
@@ -155,6 +168,9 @@ export function Timeline() {
   const peaks = useEditor((s) => s.peaks);
   const overlayPeaks = useEditor((s) => s.overlayPeaks);
   const overlayMedia = useEditor((s) => s.overlayMedia);
+  const peaksByPath = useEditor((s) => s.peaksByPath);
+  const mediaByPath = useEditor((s) => s.mediaByPath);
+  const dropGhost = useEditor((s) => s.dropGhost);
   const busy = useEditor((s) => s.busy);
 
   useEffect(() => {
@@ -174,8 +190,9 @@ export function Timeline() {
   const total = Math.max(project ? rulerDuration(project) : 1, 0.1);
   const livePps = (trackW / total) * zoom;
   const pps = lock?.pps ?? livePps;
-  const layoutTotal = lock ? Math.max(lock.total, total) : total;
-  const fitted = zoom <= 1.001 && !lock;
+  const ghostEnd = dropGhost ? dropGhost.start + Math.max(dropGhost.duration, 0.4) : 0;
+  const layoutTotal = lock ? Math.max(lock.total, total) : Math.max(total, ghostEnd);
+  const fitted = zoom <= 1.001 && !lock && !dropGhost;
   const width = fitted ? trackW : Math.ceil(layoutTotal * pps);
 
   metrics.pps = pps;
@@ -281,9 +298,27 @@ export function Timeline() {
               pps={pps}
               selected={c.id === selectedId}
               overlay
-              peaks={kind === "audio" ? (c.sourcePath ? overlayPeaks : peaks) : []}
-              sourceDuration={c.sourcePath && overlayMedia ? overlayMedia.duration : project.sourceDuration}
-              keyframes={c.sourcePath && overlayMedia ? overlayMedia.keyframeTimes : keyframes}
+              peaks={
+                kind === "audio"
+                  ? c.sourcePath
+                    ? (peaksByPath[c.sourcePath] ?? overlayPeaks)
+                    : peaks
+                  : []
+              }
+              sourceDuration={
+                c.sourcePath && mediaByPath[c.sourcePath]
+                  ? mediaByPath[c.sourcePath].duration
+                  : c.sourcePath && overlayMedia
+                    ? overlayMedia.duration
+                    : project.sourceDuration
+              }
+              keyframes={
+                c.sourcePath && mediaByPath[c.sourcePath]
+                  ? mediaByPath[c.sourcePath].keyframeTimes
+                  : c.sourcePath && overlayMedia
+                    ? overlayMedia.keyframeTimes
+                    : keyframes
+              }
               onMove={(e) => startEdit("move", c, e, c.timelineStart)}
               onRange={(e) => startBox(kind, e)}
               onTrimL={(e) => startEdit("trimL", c, e, c.sourceStart)}
@@ -298,6 +333,20 @@ export function Timeline() {
                 width: Math.max(2, Math.abs(range.end - range.start) * pps),
               }}
             />
+          ) : null}
+          {dropGhost && (kind === "video" || dropGhost.hasAudio) ? (
+            <div
+              className="clip overlay drop-ghost"
+              style={{
+                left: dropGhost.start * pps,
+                width: Math.max(12, Math.max(dropGhost.duration, 0.4) * pps),
+              }}
+            >
+              <span className="layer-tag">2</span>
+              <span className="clip-label">
+                {dropGhost.probing ? "…" : formatTime(dropGhost.duration)} · {dropGhost.name}
+              </span>
+            </div>
           ) : null}
         </div>
       </div>
@@ -378,7 +427,7 @@ export function Timeline() {
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
       </div>
       <div className="timeline-foot">
-        <span>Select · top box moves · drop a file onto overlay · Ctrl+X cut · Ctrl+V paste</span>
+        <span>Select · top box moves · drop files onto overlay · Ctrl+X cut · Ctrl+V paste</span>
         <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>
