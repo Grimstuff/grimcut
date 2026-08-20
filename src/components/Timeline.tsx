@@ -4,6 +4,7 @@ import { clipsOn, rulerDuration, timelineDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
 import { Waveform } from "./Waveform";
 import { startHotkeys } from "../lib/hotkeys";
+import { noteUserSeek } from "../lib/playbackClock";
 
 type Drag =
   | { kind: "seek"; pps: number; total: number }
@@ -19,6 +20,7 @@ type Drag =
     };
 
 function seekVideo(t: number) {
+  noteUserSeek();
   const src = useEditor.getState().setPlayhead(t);
   const v = document.querySelector("video");
   if (v && src != null) v.currentTime = src;
