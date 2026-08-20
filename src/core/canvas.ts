@@ -117,19 +117,29 @@ export function canvasGuides(cw: number, ch: number) {
   };
 }
 
-export function snapTo(v: number, guides: number[], thresh: number): { v: number; hit: number | null; dist: number } {
-  let best = v;
+export function canvasSnapPoints(cw: number, ch: number): { x: number; y: number }[] {
+  const { xs, ys } = canvasGuides(cw, ch);
+  const pts: { x: number; y: number }[] = [];
+  for (const x of xs) for (const y of ys) pts.push({ x, y });
+  return pts;
+}
+
+export function nearestPoint(
+  px: number,
+  py: number,
+  pts: { x: number; y: number }[],
+  thresh: number,
+): { x: number; y: number; dist: number } | null {
+  let best: { x: number; y: number } | null = null;
   let d = thresh;
-  let hit: number | null = null;
-  for (const g of guides) {
-    const dd = Math.abs(v - g);
+  for (const p of pts) {
+    const dd = Math.hypot(px - p.x, py - p.y);
     if (dd <= d) {
       d = dd;
-      best = g;
-      hit = g;
+      best = p;
     }
   }
-  return { v: best, hit, dist: hit == null ? Infinity : d };
+  return best ? { x: best.x, y: best.y, dist: d } : null;
 }
 
 export function snapRotation(deg: number, thresh = 5): number {

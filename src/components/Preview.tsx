@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type PointerEvent as RE } from "react";
 import { clipAt, clipSourcePath } from "../core/project";
 import {
-  canvasGuides,
+  canvasSnapPoints,
   clipDrawRect,
   clipXf,
+  nearestPoint,
   pointInRotatedRect,
   rectToTransform,
   snapRotation,
-  snapTo,
 } from "../core/canvas";
 import { useEditor } from "../store/editorStore";
 import { markVideoSeekDone, setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead } from "../lib/playbackClock";
@@ -63,7 +63,7 @@ export function Preview() {
   const overRef = useRef<HTMLVideoElement>(null);
   const drag = useRef<CanvasDrag | null>(null);
   const [view, setView] = useState({ z: 1, x: 0, y: 0 });
-  const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
+  const [snapDots, setSnapDots] = useState<{ x: number; y: number }[]>([]);
   const [rotHud, setRotHud] = useState<number | null>(null);
   const [rotTyped, setRotTyped] = useState(false);
   const previewUrl = useEditor((s) => s.previewUrl);
@@ -283,43 +283,28 @@ export function Preview() {
     const clip = p?.clips.find((c) => c.id === d.id);
     if (!p || !clip) return;
     const xf = clipXf(clip);
-    const g = canvasGuides(cw, ch);
+    const targets = canvasSnapPoints(cw, ch);
     const thresh = Math.max(2, 5 / view.z);
-    const xs: number[] = [];
-    const ys: number[] = [];
-    const show = (r: { hit: number | null; dist: number }, into: number[]) => {
-      if (r.hit != null && r.dist > 1) into.push(r.hit);
-    };
     if (d.kind === "move") {
       let left = d.left0 + (pt.x - d.px);
       let top = d.top0 + (pt.y - d.py);
-      const sl = snapTo(left, g.xs, thresh);
-      const sr = snapTo(left + d.w, g.xs, thresh);
-      const scx = snapTo(left + d.w / 2, g.xs, thresh);
-      const st = snapTo(top, g.ys, thresh);
-      const sb = snapTo(top + d.h, g.ys, thresh);
-      const scy = snapTo(top + d.h / 2, g.ys, thresh);
-      if (sl.hit != null) {
-        left = sl.v;
-        show(sl, xs);
-      } else if (sr.hit != null) {
-        left = sr.v - d.w;
-        show(sr, xs);
-      } else if (scx.hit != null) {
-        left = scx.v - d.w / 2;
-        show(scx, xs);
+      const corners = [
+        { x: left, y: top },
+        { x: left + d.w, y: top },
+        { x: left, y: top + d.h },
+        { x: left + d.w, y: top + d.h },
+        { x: left + d.w / 2, y: top + d.h / 2 },
+      ];
+      let best: { dx: number; dy: number; dist: number; tx: number; ty: number } | null = null;
+      for (const c of corners) {
+        const n = nearestPoint(c.x, c.y, targets, thresh);
+        if (n && (!best || n.dist < best.dist)) best = { dx: n.x - c.x, dy: n.y - c.y, dist: n.dist, tx: n.x, ty: n.y };
       }
-      if (st.hit != null) {
-        top = st.v;
-        show(st, ys);
-      } else if (sb.hit != null) {
-        top = sb.v - d.h;
-        show(sb, ys);
-      } else if (scy.hit != null) {
-        top = scy.v - d.h / 2;
-        show(scy, ys);
-      }
-      setGuides({ xs, ys });
+      if (best) {
+        left += best.dx;
+        top += best.dy;
+        setSnapDots(best.dist > 1 ? [{ x: best.tx, y: best.ty }] : []);
+      } else setSnapDots([]);
       useEditor.getState().liveTransform(d.id, {
         ...xf,
         x: left + d.w / 2 - cw / 2,
@@ -329,16 +314,12 @@ export function Preview() {
       const sz = srcSize(clip);
       let mx = pt.x;
       let my = pt.y;
-      const sx = snapTo(mx, g.xs, thresh);
-      const sy = snapTo(my, g.ys, thresh);
-      if (sx.hit != null) {
-        mx = sx.v;
-        show(sx, xs);
-      }
-      if (sy.hit != null) {
-        my = sy.v;
-        show(sy, ys);
-      }
+      const hit = nearestPoint(mx, my, targets, thresh);
+      if (hit) {
+        mx = hit.x;
+        my = hit.y;
+        setSnapDots(hit.dist > 1 ? [{ x: hit.x, y: hit.y }] : []);
+      } else setSnapDots([]);
       let w = Math.max(4, Math.abs(mx - d.ax));
       let h = Math.max(4, Math.abs(my - d.ay));
       const free = e.shiftKey;
@@ -349,15 +330,6 @@ export function Preview() {
       }
       const left = mx < d.ax ? d.ax - w : d.ax;
       const top = my < d.ay ? d.ay - h : d.ay;
-      const el = snapTo(left, g.xs, thresh);
-      const er = snapTo(left + w, g.xs, thresh);
-      const et = snapTo(top, g.ys, thresh);
-      const eb = snapTo(top + h, g.ys, thresh);
-      show(el, xs);
-      show(er, xs);
-      show(et, ys);
-      show(eb, ys);
-      setGuides({ xs, ys });
       useEditor.getState().liveTransform(
         d.id,
         rectToTransform(left, top, w, h, cw, ch, sz.w, sz.h, d.rot),
@@ -390,7 +362,7 @@ export function Preview() {
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    setGuides({ xs: [], ys: [] });
+    setSnapDots([]);
     setRotHud(null);
     setRotTyped(false);
     if (d && d.kind !== "pan") useEditor.getState().commit(d.before, "Transform");
@@ -455,11 +427,17 @@ export function Preview() {
             />
           </div>
             <div className="canvas-guides" style={{ width: cw, height: ch }}>
-              {guides.xs.map((x) => (
-                <div key={`x${x}`} className="snap-guide v" style={{ left: x, width: Math.max(2, 2 / view.z) }} />
-              ))}
-              {guides.ys.map((y) => (
-                <div key={`y${y}`} className="snap-guide h" style={{ top: y, height: Math.max(2, 2 / view.z) }} />
+              {snapDots.map((p) => (
+                <div
+                  key={`${p.x},${p.y}`}
+                  className="snap-dot"
+                  style={{
+                    left: p.x,
+                    top: p.y,
+                    width: Math.max(8, 8 / view.z),
+                    height: Math.max(8, 8 / view.z),
+                  }}
+                />
               ))}
             </div>
             {bbox ? (
