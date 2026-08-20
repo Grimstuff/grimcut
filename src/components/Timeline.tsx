@@ -3,6 +3,7 @@ import { clipDuration, formatTime, type Clip, type ClipKind } from "../core/type
 import { clipsOn, rulerDuration, timelineDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
 import { Waveform } from "./Waveform";
+import { startHotkeys } from "../lib/hotkeys";
 
 type Drag =
   | { kind: "seek"; pps: number; total: number }
@@ -100,6 +101,7 @@ function onDragMove(e: { clientX: number; buttons?: number }) {
 }
 
 function ensureDragListeners() {
+  startHotkeys();
   const w = window as ListenWin;
   if (w[LISTEN]) {
     window.removeEventListener("pointermove", w[LISTEN].move, true);
@@ -119,7 +121,6 @@ function ensureDragListeners() {
 }
 
 function armDrag(e: PointerEvent, next: Drag, lock?: { pps: number; total: number }) {
-  e.preventDefault();
   e.stopPropagation();
   drag = next;
   if (lock) applyLock(lock);
@@ -127,6 +128,12 @@ function armDrag(e: PointerEvent, next: Drag, lock?: { pps: number; total: numbe
     scrollerEl?.setPointerCapture(e.pointerId);
   } catch {
     /* not capturable */
+  }
+  try {
+    window.focus();
+    (document.querySelector(".app") as HTMLElement | null)?.focus({ preventScroll: true });
+  } catch {
+    /* ignore */
   }
 }
 

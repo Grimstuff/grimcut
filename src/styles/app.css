@@ -63,6 +63,7 @@ html.is-live-resize body {
   flex-direction: column;
   height: 100%;
   background: var(--gp-surface);
+  outline: none;
   /* Pack from the bottom: timeline/status stay put when the window grows up
      (top-right resize keeps HWND bottom-left fixed). */
 }
