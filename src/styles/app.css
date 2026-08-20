@@ -452,6 +452,22 @@ html.is-live-resize body {
   border-color: #b4e05a;
 }
 
+.layer-tag {
+  position: absolute;
+  left: 10px;
+  bottom: 3px;
+  z-index: 4;
+  pointer-events: none;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #f0a090;
+  letter-spacing: 0.02em;
+}
+
 .clip.selected {
   outline: 1px solid #fff;
   box-shadow: 0 0 0 1px var(--gp-accent);

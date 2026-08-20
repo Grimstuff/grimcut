@@ -406,8 +406,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       selectedId: added?.id ?? get().selectedId,
       status:
         added?.layer === "over"
-          ? "Pasted as overlay (on top where it overlaps) — Ctrl+Z to undo"
-          : "Paste",
+          ? "Pasted on overlay (2nd layer) — plays on top, then the clip under it"
+          : "Pasted on base",
     });
   },
 

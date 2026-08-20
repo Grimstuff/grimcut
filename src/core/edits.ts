@@ -236,7 +236,7 @@ export function tryPaste(
 
   const clips = p.clips.map(cloneClip);
   if (layer === "over") {
-    // max one overlay of this kind
+    // One overlay (2nd layer) per kind — replacing any existing overlay on that track.
     const rest = clips.filter((c) => !(c.kind === chunk.kind && c.layer === "over"));
     rest.push({
       id: newId(),

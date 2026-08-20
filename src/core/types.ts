@@ -1,4 +1,5 @@
 export type ClipKind = "video" | "audio";
+/** Two-layer system: `base` is the main track, `over` is the single 2nd layer per kind. Overlay wins while it covers. */
 export type ClipLayer = "base" | "over";
 
 export type Clip = {

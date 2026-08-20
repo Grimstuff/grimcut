@@ -374,7 +374,7 @@ export function Timeline() {
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
       </div>
       <div className="timeline-foot">
-        <span>Drag bar to select · box on top to move · Ctrl+X cut · Ctrl+V paste</span>
+        <span>Select · top box moves · overlay is 2nd layer · Ctrl+X cut · Ctrl+V paste</span>
         <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>
@@ -429,7 +429,7 @@ function ClipView({
         if (e.altKey) onMove(e);
         else onRange(e);
       }}
-      title={`${clip.kind} ${overlay ? "overlay" : "base"} — drag to select, top box to move`}
+      title={`${clip.kind} ${overlay ? "overlay (2nd layer)" : "base"} — drag to select, top box to move`}
     >
       <div
         className="clip-grip"
@@ -446,6 +446,11 @@ function ClipView({
       {clip.kind === "audio" ? <Waveform clip={clip} peaks={peaks} sourceDuration={sourceDuration} /> : (
         <span className="clip-label">{formatTime(dur)}</span>
       )}
+      {overlay ? (
+        <span className="layer-tag" title="Overlay (2nd layer)">
+          2
+        </span>
+      ) : null}
       {clip.linkGroup ? <span className="link-dot" title="Linked A/V" /> : null}
       <div className="handle right" onPointerDown={onTrimR} />
     </div>
