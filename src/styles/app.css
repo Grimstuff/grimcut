@@ -337,50 +337,56 @@ html.is-live-resize body {
   background: #5eb0ff;
 }
 
+.canvas-guides {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+
 .snap-guide {
   position: absolute;
   pointer-events: none;
-  z-index: 6;
   background: #ff5e8a;
-  opacity: 0.85;
+  opacity: 0;
+  animation: snap-fade-in 0.1s ease forwards;
+}
+
+@keyframes snap-fade-in {
+  to {
+    opacity: 0.9;
+  }
 }
 
 .snap-guide.v {
   top: 0;
-  width: 1px;
+  height: 100%;
 }
 
 .snap-guide.h {
   left: 0;
-  height: 1px;
+  width: 100%;
 }
 
-.rot-hud,
-.rot-input {
+.rot-ghost {
   position: absolute;
-  z-index: 8;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform-origin: center bottom;
   pointer-events: none;
-  transform-origin: center center;
-}
-
-.rot-hud {
-  color: #9ad4ff;
-  font-size: 13px;
+  z-index: 8;
+  color: #e8e8e8;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 1px 3px #000;
+  text-shadow: 0 1px 3px #000, 0 0 8px rgba(0, 0, 0, 0.8);
   white-space: nowrap;
 }
 
-.rot-input {
-  pointer-events: auto;
-  width: 4.5rem;
-  height: 22px;
-  border: 1px solid #5eb0ff;
-  background: #141416;
-  color: #9ad4ff;
-  font-size: 12px;
-  text-align: center;
-  padding: 0 4px;
+.rot-ghost.is-typed {
+  color: #fff;
+  font-weight: 700;
+  text-shadow: 0 0 8px rgba(94, 176, 255, 0.9), 0 1px 3px #000;
 }
 
 .canvas-meta {

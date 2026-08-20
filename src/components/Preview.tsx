@@ -17,7 +17,17 @@ type Corner = "nw" | "ne" | "sw" | "se";
 
 type CanvasDrag =
   | { kind: "pan"; x: number; y: number; vx: number; vy: number }
-  | { kind: "move"; id: string; x0: number; y0: number; px: number; py: number; before: ReturnType<typeof snapshotClips> }
+  | {
+      kind: "move";
+      id: string;
+      left0: number;
+      top0: number;
+      w: number;
+      h: number;
+      px: number;
+      py: number;
+      before: ReturnType<typeof snapshotClips>;
+    }
   | { kind: "scale"; id: string; corner: Corner; ax: number; ay: number; rot: number; before: ReturnType<typeof snapshotClips> }
   | { kind: "rotate"; id: string; rot0: number; ang0: number; typed: string; before: ReturnType<typeof snapshotClips> };
 
@@ -55,8 +65,7 @@ export function Preview() {
   const [view, setView] = useState({ z: 1, x: 0, y: 0 });
   const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
   const [rotHud, setRotHud] = useState<number | null>(null);
-  const [rotText, setRotText] = useState("");
-  const rotBefore = useRef<ReturnType<typeof snapshotClips> | null>(null);
+  const [rotTyped, setRotTyped] = useState(false);
   const previewUrl = useEditor((s) => s.previewUrl);
   const overlayUrl = useEditor((s) => s.overlayUrl);
   const pickOpen = useEditor((s) => s.pickOpen);
@@ -121,8 +130,10 @@ export function Preview() {
         d.typed = d.typed.slice(0, -1);
         const n = Number.parseFloat(d.typed);
         if (Number.isFinite(n)) {
-          useEditor.getState().liveTransform(d.id, { ...clipXf(useEditor.getState().project?.clips.find((c) => c.id === d.id)!), rotation: n });
+          const clip = useEditor.getState().project?.clips.find((c) => c.id === d.id);
+          if (clip) useEditor.getState().liveTransform(d.id, { ...clipXf(clip), rotation: n });
           setRotHud(n);
+          setRotTyped(true);
         }
         return;
       }
@@ -131,12 +142,10 @@ export function Preview() {
         d.typed += e.key;
         const n = Number.parseFloat(d.typed);
         if (Number.isFinite(n)) {
-          const p = useEditor.getState().project;
-          const clip = p?.clips.find((c) => c.id === d.id);
-          if (clip) {
-            useEditor.getState().liveTransform(d.id, { ...clipXf(clip), rotation: n });
-            setRotHud(n);
-          }
+          const clip = useEditor.getState().project?.clips.find((c) => c.id === d.id);
+          if (clip) useEditor.getState().liveTransform(d.id, { ...clipXf(clip), rotation: n });
+          setRotHud(n);
+          setRotTyped(true);
         }
       }
     };
@@ -243,8 +252,19 @@ export function Preview() {
     }
     if (hit) {
       useEditor.getState().select(hit.id);
-      const xf = clipXf(hit);
-      drag.current = { kind: "move", id: hit.id, x0: xf.x, y0: xf.y, px: pt.x, py: pt.y, before: snapshotClips() };
+      const sz = srcSize(hit);
+      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(hit));
+      drag.current = {
+        kind: "move",
+        id: hit.id,
+        left0: rect.x,
+        top0: rect.y,
+        w: rect.w,
+        h: rect.h,
+        px: pt.x,
+        py: pt.y,
+        before: snapshotClips(),
+      };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
@@ -268,41 +288,39 @@ export function Preview() {
     const xs: number[] = [];
     const ys: number[] = [];
     if (d.kind === "move") {
-      const sz = srcSize(clip);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, xf);
-      let left = rect.x + (pt.x - d.px);
-      let top = rect.y + (pt.y - d.py);
+      let left = d.left0 + (pt.x - d.px);
+      let top = d.top0 + (pt.y - d.py);
       const sl = snapTo(left, g.xs, thresh);
-      const sr = snapTo(left + rect.w, g.xs, thresh);
-      const scx = snapTo(left + rect.w / 2, g.xs, thresh);
+      const sr = snapTo(left + d.w, g.xs, thresh);
+      const scx = snapTo(left + d.w / 2, g.xs, thresh);
       const st = snapTo(top, g.ys, thresh);
-      const sb = snapTo(top + rect.h, g.ys, thresh);
-      const scy = snapTo(top + rect.h / 2, g.ys, thresh);
+      const sb = snapTo(top + d.h, g.ys, thresh);
+      const scy = snapTo(top + d.h / 2, g.ys, thresh);
       if (sl.hit != null) {
         left = sl.v;
         xs.push(sl.hit);
       } else if (sr.hit != null) {
-        left = sr.v - rect.w;
+        left = sr.v - d.w;
         xs.push(sr.hit);
       } else if (scx.hit != null) {
-        left = scx.v - rect.w / 2;
+        left = scx.v - d.w / 2;
         xs.push(scx.hit);
       }
       if (st.hit != null) {
         top = st.v;
         ys.push(st.hit);
       } else if (sb.hit != null) {
-        top = sb.v - rect.h;
+        top = sb.v - d.h;
         ys.push(sb.hit);
       } else if (scy.hit != null) {
-        top = scy.v - rect.h / 2;
+        top = scy.v - d.h / 2;
         ys.push(scy.hit);
       }
       setGuides({ xs, ys });
       useEditor.getState().liveTransform(d.id, {
         ...xf,
-        x: left + rect.w / 2 - cw / 2,
-        y: top + rect.h / 2 - ch / 2,
+        x: left + d.w / 2 - cw / 2,
+        y: top + d.h / 2 - ch / 2,
       });
     } else if (d.kind === "scale") {
       const sz = srcSize(clip);
@@ -342,13 +360,26 @@ export function Preview() {
         rectToTransform(left, top, w, h, cw, ch, sz.w, sz.h, d.rot),
       );
     } else if (d.kind === "rotate") {
-      if (d.typed) return;
       const sz = srcSize(clip);
       const rect = clipDrawRect(sz.w, sz.h, cw, ch, xf);
       const ang = Math.atan2(pt.y - rect.cy, pt.x - rect.cx);
       const raw = d.rot0 + ((ang - d.ang0) * 180) / Math.PI;
+      const typed = Number.parseFloat(d.typed);
+      if (d.typed && Number.isFinite(typed)) {
+        let delta = raw - typed;
+        while (delta > 180) delta -= 360;
+        while (delta < -180) delta += 360;
+        if (Math.abs(delta) < 10) {
+          setRotHud(typed);
+          setRotTyped(true);
+          return;
+        }
+        d.typed = "";
+        setRotTyped(false);
+      }
       const rotation = snapRotation(raw, 6);
       setRotHud(rotation);
+      setRotTyped(false);
       useEditor.getState().liveTransform(d.id, { ...xf, rotation });
     }
   };
@@ -358,6 +389,7 @@ export function Preview() {
     drag.current = null;
     setGuides({ xs: [], ys: [] });
     setRotHud(null);
+    setRotTyped(false);
     if (d && d.kind !== "pan") useEditor.getState().commit(d.before, "Transform");
   };
 
@@ -419,12 +451,14 @@ export function Preview() {
               style={placeVideo(overClip)}
             />
           </div>
-            {guides.xs.map((x) => (
-              <div key={`x${x}`} className="snap-guide v" style={{ left: x, height: ch }} />
-            ))}
-            {guides.ys.map((y) => (
-              <div key={`y${y}`} className="snap-guide h" style={{ top: y, width: cw }} />
-            ))}
+            <div className="canvas-guides" style={{ width: cw, height: ch }}>
+              {guides.xs.map((x) => (
+                <div key={`x${x}`} className="snap-guide v" style={{ left: x, width: Math.max(2, 2 / view.z) }} />
+              ))}
+              {guides.ys.map((y) => (
+                <div key={`y${y}`} className="snap-guide h" style={{ top: y, height: Math.max(2, 2 / view.z) }} />
+              ))}
+            </div>
             {bbox ? (
               <div
                 className="bbox"
@@ -436,52 +470,18 @@ export function Preview() {
                   transform: `rotate(${bbox.rotation}deg)`,
                 }}
               >
-                <span className="bbox-rot" title="Rotate — drag, or type degrees" />
+                <span className="bbox-rot" title="Rotate — drag, or type degrees">
+                  {rotHud != null ? (
+                    <span className={`rot-ghost${rotTyped ? " is-typed" : ""}`} style={{ transform: `translateX(-50%) rotate(${-bbox.rotation}deg) scale(${1 / view.z})` }}>
+                      {rotHud.toFixed(1)}°
+                    </span>
+                  ) : null}
+                </span>
                 <span className="bbox-handle nw" data-corner="nw" />
                 <span className="bbox-handle ne" data-corner="ne" />
                 <span className="bbox-handle sw" data-corner="sw" />
                 <span className="bbox-handle se" data-corner="se" />
               </div>
-            ) : null}
-            {bbox && rotHud != null ? (
-              <div
-                className="rot-hud"
-                style={{
-                  left: bbox.cx,
-                  top: bbox.cy,
-                  transform: `translate(-50%, -120%) scale(${1 / view.z})`,
-                }}
-              >
-                {rotHud.toFixed(1)}°
-              </div>
-            ) : null}
-            {bbox && selectedLive && rotHud == null ? (
-              <input
-                className="rot-input"
-                title="Rotation in degrees"
-                value={rotText || String(Math.round(clipXf(selectedLive).rotation * 10) / 10)}
-                onPointerDown={(e) => e.stopPropagation()}
-                onChange={(e) => {
-                  setRotText(e.target.value);
-                  const n = Number.parseFloat(e.target.value);
-                  if (!Number.isFinite(n) || !selectedLive) return;
-                  useEditor.getState().liveTransform(selectedLive.id, { ...clipXf(selectedLive), rotation: n });
-                }}
-                onBlur={() => {
-                  if (rotBefore.current) useEditor.getState().commit(rotBefore.current, "Rotate");
-                  rotBefore.current = null;
-                  setRotText("");
-                }}
-                onFocus={() => {
-                  rotBefore.current = snapshotClips();
-                  if (selectedLive) setRotText(String(Math.round(clipXf(selectedLive).rotation * 10) / 10));
-                }}
-                style={{
-                  left: bbox.cx,
-                  top: bbox.y - 36,
-                  transform: `translate(-50%, 0) scale(${1 / view.z})`,
-                }}
-              />
             ) : null}
         </div>
       </div>
