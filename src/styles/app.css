@@ -623,6 +623,13 @@ html.is-live-resize body {
   cursor: pointer;
 }
 
+.tb-vol-pct {
+  min-width: 3.2ch;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--gp-text-muted);
+}
+
 .lcd {
   font-family: "Cascadia Mono", "Consolas", "Segoe UI Monospace", ui-monospace, monospace;
   font-variant-numeric: tabular-nums;

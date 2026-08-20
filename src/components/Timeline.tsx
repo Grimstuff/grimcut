@@ -111,7 +111,7 @@ function onDragMove(e: { clientX: number; buttons?: number }) {
   if (d.kind !== "move" && d.kind !== "trimL" && d.kind !== "trimR") return;
   const delta = (e.clientX - d.startX) / d.pps;
   const snapSec = Math.min(0.25, Math.max(0.05, 10 / d.pps));
-  const edgeSnap = Math.min(0.35, Math.max(snapSec, 14 / d.pps));
+  const edgeSnap = Math.min(0.18, Math.max(0.03, 7 / d.pps));
   const st = useEditor.getState();
   if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta, edgeSnap, d.before);
   if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta, edgeSnap, d.before);

@@ -146,6 +146,7 @@ export function TransportBar() {
   const [arOpen, setArOpen] = useState(false);
   const [resOpen, setResOpen] = useState(false);
   const [resText, setResText] = useState("");
+  const [volHint, setVolHint] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const lastVol = useRef(1);
 
@@ -192,7 +193,11 @@ export function TransportBar() {
   return (
     <div className="tl-bar" ref={wrap}>
       <div className="tl-bar-left">
-        <div className="tb-vol" title="Preview volume">
+        <div
+          className="tb-vol"
+          onPointerEnter={() => setVolHint(true)}
+          onPointerLeave={() => setVolHint(false)}
+        >
           <button
             type="button"
             className="icon-btn"
@@ -225,6 +230,7 @@ export function TransportBar() {
               applyPreviewVolume(v);
             }}
           />
+          {volHint ? <span className="tb-vol-pct">{Math.round(volume * 100)}%</span> : null}
         </div>
         <div className="tb-canvas-wrap">
           <button
