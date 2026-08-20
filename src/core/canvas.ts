@@ -117,9 +117,18 @@ export function canvasGuides(cw: number, ch: number) {
   };
 }
 
-/** Thirds × center intersections only — not frame corners or edges. */
+/** Visible thirds × center dots. */
 export function canvasSnapPoints(cw: number, ch: number): { x: number; y: number }[] {
   const { xs, ys } = canvasGuides(cw, ch);
+  const pts: { x: number; y: number }[] = [];
+  for (const x of xs) for (const y of ys) pts.push({ x, y });
+  return pts;
+}
+
+/** Magnets: frame corners + edge mids + thirds/center. */
+export function canvasMagnetPoints(cw: number, ch: number): { x: number; y: number }[] {
+  const xs = [0, cw / 3, cw / 2, (2 * cw) / 3, cw];
+  const ys = [0, ch / 3, ch / 2, (2 * ch) / 3, ch];
   const pts: { x: number; y: number }[] = [];
   for (const x of xs) for (const y of ys) pts.push({ x, y });
   return pts;

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as RE } from "react";
 import { clipAt, clipSourcePath } from "../core/project";
 import {
+  canvasMagnetPoints,
   canvasSnapPoints,
   clipDrawRect,
   clipXf,
@@ -233,6 +234,24 @@ export function Preview() {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
+    if (t.closest(".bbox-center") && selectedLive) {
+      const sz = srcSize(selectedLive);
+      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(selectedLive));
+      drag.current = {
+        kind: "move",
+        id: selectedLive.id,
+        left0: rect.x,
+        top0: rect.y,
+        w: rect.w,
+        h: rect.h,
+        px: pt.x,
+        py: pt.y,
+        before: snapshotClips(),
+      };
+      setMarksOn(true);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
     const handle = t.closest(".bbox-handle") as HTMLElement | null;
     if (handle && selectedLive) {
       const corner = (handle.dataset.corner ?? "se") as Corner;
@@ -286,8 +305,8 @@ export function Preview() {
     const clip = p?.clips.find((c) => c.id === d.id);
     if (!p || !clip) return;
     const xf = clipXf(clip);
-    const targets = canvasSnapPoints(cw, ch);
-    const thresh = Math.max(2, 5 / view.z);
+    const targets = canvasMagnetPoints(cw, ch);
+    const thresh = Math.max(8, 12 / view.z);
     if (d.kind === "move") {
       let left = d.left0 + (pt.x - d.px);
       let top = d.top0 + (pt.y - d.py);
@@ -331,8 +350,24 @@ export function Preview() {
         if (w / h > ar) h = w / ar;
         else w = h * ar;
       }
-      const left = mx < d.ax ? d.ax - w : d.ax;
-      const top = my < d.ay ? d.ay - h : d.ay;
+      let left = mx < d.ax ? d.ax - w : d.ax;
+      let top = my < d.ay ? d.ay - h : d.ay;
+      const corner = { x: mx < d.ax ? left : left + w, y: my < d.ay ? top : top + h };
+      const hit2 = nearestPoint(corner.x, corner.y, targets, thresh);
+      if (hit2) {
+        mx = hit2.x;
+        my = hit2.y;
+        w = Math.max(4, Math.abs(mx - d.ax));
+        h = Math.max(4, Math.abs(my - d.ay));
+        if (!free) {
+          const ar = sz.w / sz.h;
+          if (w / h > ar) h = w / ar;
+          else w = h * ar;
+        }
+        left = mx < d.ax ? d.ax - w : d.ax;
+        top = my < d.ay ? d.ay - h : d.ay;
+        setHotDot({ x: hit2.x, y: hit2.y });
+      }
       useEditor.getState().liveTransform(
         d.id,
         rectToTransform(left, top, w, h, cw, ch, sz.w, sz.h, d.rot),
@@ -461,6 +496,7 @@ export function Preview() {
                     </span>
                   ) : null}
                 </span>
+                <span className="bbox-center" title="Move — snaps like a corner" />
                 <span className="bbox-handle nw" data-corner="nw" />
                 <span className="bbox-handle ne" data-corner="ne" />
                 <span className="bbox-handle sw" data-corner="sw" />

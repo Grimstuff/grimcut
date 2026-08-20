@@ -313,6 +313,21 @@ html.is-live-resize body {
 .bbox-handle.sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
 .bbox-handle.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
 
+.bbox-center {
+  pointer-events: auto;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1.5px solid #2a6cb0;
+  box-sizing: border-box;
+  cursor: move;
+}
+
 .bbox-rot {
   pointer-events: auto;
   position: absolute;
