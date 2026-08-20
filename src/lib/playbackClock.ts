@@ -25,6 +25,18 @@ function pauseAll() {
   overlayEl?.pause();
 }
 
+export function applyPreviewVolume(v: number) {
+  const vol = Math.max(0, Math.min(1, v));
+  if (videoEl) {
+    videoEl.volume = vol;
+    videoEl.muted = vol <= 0;
+  }
+  if (overlayEl) {
+    overlayEl.volume = vol;
+    overlayEl.muted = vol <= 0;
+  }
+}
+
 function playVideo(v: HTMLVideoElement, fromUser: boolean) {
   const p = v.play();
   if (p && typeof p.catch === "function") {
@@ -69,6 +81,9 @@ function syncLayer(el: HTMLVideoElement | null, p: VideoProject, clip: Clip | nu
       /* ignore */
     }
   }
+  const vol = useEditor.getState().previewVolume;
+  el.volume = vol;
+  el.muted = vol <= 0;
   if (playing && el.paused) playVideo(el, false);
   if (!playing && !el.paused) el.pause();
 }

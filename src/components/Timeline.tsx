@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { clipDuration, formatTime, type Clip, type ClipKind } from "../core/types";
-import { clipsOn, rulerDuration, timelineDuration } from "../core/project";
+import { clipsOn, rulerDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
 import { Waveform } from "./Waveform";
 import { startHotkeys } from "../lib/hotkeys";
-import { noteUserSeek, syncPreviewToPlayhead, togglePlayback } from "../lib/playbackClock";
-import { AR_PRESETS } from "../core/canvas";
+import { noteUserSeek, syncPreviewToPlayhead } from "../lib/playbackClock";
+import { TransportBar } from "./TransportBar";
 
 type Drag =
   | { kind: "seek"; pps: number; total: number }
@@ -171,8 +171,6 @@ export function Timeline() {
   const peaksByPath = useEditor((s) => s.peaksByPath);
   const mediaByPath = useEditor((s) => s.mediaByPath);
   const dropGhost = useEditor((s) => s.dropGhost);
-  const busy = useEditor((s) => s.busy);
-  const playing = useEditor((s) => s.playing);
 
   useEffect(() => {
     const measure = () => {
@@ -354,55 +352,9 @@ export function Timeline() {
     );
   };
 
-  const selected = project.clips.find((c) => c.id === selectedId);
-  const rangeDur = range ? Math.abs(range.end - range.start) : 0;
-
   return (
     <div className="timeline">
-      <div className="timeline-head">
-        <span>
-          {formatTime(playhead)} / {formatTime(timelineDuration(project))} · {zoom <= 1.01 ? "fit" : `${zoom.toFixed(1)}×`}
-          {range && rangeDur > 0.04 ? ` · sel ${formatTime(rangeDur)}` : ""}
-        </span>
-        <div className="timeline-actions">
-          <button type="button" className={playing ? "is-on" : ""} title="Play / pause (Space)" onClick={() => togglePlayback()}>
-            {playing ? "Pause" : "Play"}
-          </button>
-          <CanvasSize />
-          <button type="button" title="Slice at playhead (S / double-click)" onClick={() => useEditor.getState().slice()}>
-            Slice
-          </button>
-          <button type="button" disabled={!selected && rangeDur <= 0.04} onClick={() => useEditor.getState().del()}>
-            Delete
-          </button>
-          <button
-            type="button"
-            className={selected?.linkGroup ? "is-on" : ""}
-            disabled={!selected}
-            title="Link / unlink video & audio"
-            onClick={() => selected && useEditor.getState().toggleLink(selected.id)}
-          >
-            {selected?.linkGroup ? "Linked" : "Unlinked"}
-          </button>
-          <button
-            type="button"
-            title="Cut selected range (Ctrl+X)"
-            disabled={rangeDur <= 0.04}
-            onClick={() => useEditor.getState().liftRange()}
-          >
-            Cut
-          </button>
-          <button type="button" disabled={!useEditor.getState().canUndo} onClick={() => useEditor.getState().undo()}>
-            Undo
-          </button>
-          <button type="button" disabled={!useEditor.getState().canRedo} onClick={() => useEditor.getState().redo()}>
-            Redo
-          </button>
-          <button type="button" disabled={busy} onClick={() => void useEditor.getState().exportVideo()}>
-            Save…
-          </button>
-        </div>
-      </div>
+      <TransportBar />
       <div
         ref={(el) => {
           scroller.current = el;
@@ -430,60 +382,6 @@ export function Timeline() {
         <span>{pps.toFixed(0)} px/s</span>
       </div>
     </div>
-  );
-}
-
-function CanvasSize() {
-  const project = useEditor((s) => s.project);
-  const [w, setW] = useState("");
-  const [h, setH] = useState("");
-  useEffect(() => {
-    if (!project) return;
-    setW(String(project.canvasWidth));
-    setH(String(project.canvasHeight));
-  }, [project?.canvasWidth, project?.canvasHeight]);
-  if (!project) return null;
-  const apply = () => {
-    const nw = Number.parseInt(w, 10);
-    const nh = Number.parseInt(h, 10);
-    if (nw > 1 && nh > 1) useEditor.getState().setCanvas(nw, nh);
-  };
-  const cur = `${project.canvasWidth}:${project.canvasHeight}`;
-  return (
-    <span className="canvas-ctrl">
-      <input
-        className="canvas-dim"
-        value={w}
-        onChange={(e) => setW(e.target.value)}
-        onBlur={apply}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") apply();
-        }}
-        aria-label="Canvas width"
-      />
-      <span>×</span>
-      <input
-        className="canvas-dim"
-        value={h}
-        onChange={(e) => setH(e.target.value)}
-        onBlur={apply}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") apply();
-        }}
-        aria-label="Canvas height"
-      />
-      {AR_PRESETS.map((p) => (
-        <button
-          key={p.id}
-          type="button"
-          className={cur === `${p.w}:${p.h}` ? "is-on" : ""}
-          title={`${p.w}×${p.h}`}
-          onClick={() => useEditor.getState().setCanvasPreset(p.id)}
-        >
-          {p.id}
-        </button>
-      ))}
-    </span>
   );
 }
 

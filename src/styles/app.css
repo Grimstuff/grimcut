@@ -420,48 +420,205 @@ html.is-live-resize body {
   -webkit-user-select: none;
 }
 
-.timeline-head {
-  display: flex;
-  justify-content: flex-start;
+.tl-bar {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: var(--gp-text-secondary);
+  gap: 8px;
+  min-height: 40px;
+  margin-bottom: 6px;
   flex-shrink: 0;
 }
 
-.timeline-head > span {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.timeline-actions {
+.tl-bar-left,
+.tl-bar-right {
   display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  gap: 4px;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
-.timeline-actions button {
-  appearance: none;
+.tl-bar-right {
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.tl-bar-center {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tb-combo {
+  position: relative;
+}
+
+.tb-combo-btn,
+.tb-res-input,
+.tb-caret-btn {
+  height: 28px;
   border: 1px solid var(--gp-border);
   background: var(--gp-surface);
   color: var(--gp-text);
-  border-radius: 5px;
-  padding: 3px 10px;
-  margin-left: 6px;
-  cursor: pointer;
+  border-radius: 6px;
   font-size: 12px;
+  font-family: inherit;
 }
 
-.timeline-actions button:hover:not(:disabled) {
+.tb-combo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 10px;
+  cursor: pointer;
+  min-width: 58px;
+}
+
+.tb-combo-btn:hover,
+.tb-caret-btn:hover {
   background: var(--gp-tab-hover);
 }
 
-.timeline-actions button:disabled {
-  opacity: 0.4;
+.tb-res {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.tb-res-input {
+  width: 108px;
+  padding: 0 8px;
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+}
+
+.tb-caret-btn {
+  width: 22px;
+  padding: 0;
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+}
+
+.tb-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--gp-text-muted);
+}
+
+.tb-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 100%;
+  padding: 4px;
+  background: var(--gp-menu-bg);
+  border: 1px solid var(--gp-border);
+  border-radius: 8px;
+  box-shadow: var(--gp-menu-shadow);
+}
+
+.tb-menu-wide {
+  min-width: 148px;
+}
+
+.tb-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--gp-text);
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tb-menu button:hover,
+.tb-menu button.is-on {
+  background: var(--gp-accent-soft);
+  color: var(--gp-text);
+}
+
+.tb-vol {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.tb-vol input[type="range"] {
+  width: 72px;
+  height: 4px;
+  accent-color: var(--gp-accent);
+  cursor: pointer;
+}
+
+.lcd {
+  font-family: "Cascadia Mono", "Consolas", "Segoe UI Monospace", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  color: #9ad4ff;
+  background: #141416;
+  border: 1px solid #2c2c32;
+  border-radius: 7px;
+  padding: 4px 10px 5px;
+  text-shadow: 0 0 10px rgba(120, 190, 255, 0.35);
+  min-width: 11.6ch;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.icon-btn {
+  appearance: none;
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--gp-text-secondary);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--gp-tab-hover);
+  color: var(--gp-text);
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.icon-btn.is-on {
+  color: var(--gp-accent);
+  background: var(--gp-accent-soft);
+}
+
+.icon-btn-lg {
+  width: 36px;
+  height: 36px;
+}
+
+.icon-btn.is-record:disabled {
+  opacity: 0.45;
+}
+
+.icon-export {
+  margin-left: 8px;
+  background: var(--gp-accent);
+  color: var(--gp-accent-fg);
+}
+
+.icon-export:hover:not(:disabled) {
+  background: var(--gp-accent-hover);
+  color: var(--gp-accent-fg);
 }
 
 .tl-scroll {

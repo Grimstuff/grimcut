@@ -14,7 +14,7 @@ import {
   snapStart,
   timelineDuration,
 } from "../core/project";
-import { AR_PRESETS, evenPx, type ClipTransform } from "../core/canvas";
+import { AR_PRESETS, RES_BY_AR, evenPx, type ClipTransform } from "../core/canvas";
 import {
   UndoStack,
   chunkFromRange,
@@ -75,6 +75,7 @@ type EditorState = {
   playing: boolean;
   menuOpen: boolean;
   progress: { label: string; pct: number } | null;
+  previewVolume: number;
   openPath: (path: string) => Promise<void>;
   dropFile: (path: string, at?: number) => Promise<void>;
   addOverlay: (path: string, at?: number) => Promise<void>;
@@ -105,6 +106,7 @@ type EditorState = {
   setProgress: (p: { label: string; pct: number } | null) => void;
   setCanvas: (w: number, h: number) => void;
   setCanvasPreset: (id: string) => void;
+  setPreviewVolume: (v: number) => void;
   liveTransform: (id: string, xf: ClipTransform) => void;
   exportVideo: () => Promise<void>;
 };
@@ -155,6 +157,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   playing: false,
   menuOpen: false,
   progress: null,
+  previewVolume: 1,
 
   setPlaying: (v) => set({ playing: v }),
   togglePlay: () => {
@@ -615,10 +618,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   setCanvasPreset: (id) => {
-    const preset = AR_PRESETS.find((x) => x.id === id);
-    if (!preset) return;
-    get().setCanvas(preset.w, preset.h);
+    const list = RES_BY_AR[id];
+    const fallback = AR_PRESETS.find((x) => x.id === id);
+    const pick = list?.[2] ?? list?.[0] ?? fallback;
+    if (!pick) return;
+    get().setCanvas(pick.w, pick.h);
   },
+
+  setPreviewVolume: (v) => set({ previewVolume: Math.max(0, Math.min(1, v)) }),
 
   liveTransform: (id, xf) => {
     const p = get().project;
