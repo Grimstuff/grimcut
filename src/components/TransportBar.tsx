@@ -20,25 +20,32 @@ function splitTime(t: number) {
 }
 
 function clampSeg(h: number, m: number, s: number, ms: number) {
-  let extra = 0;
-  if (ms > 999) {
-    extra += Math.floor(ms / 1000);
-    ms %= 1000;
+  while (ms >= 1000) {
+    s += 1;
+    ms -= 1000;
   }
-  s += extra;
-  extra = 0;
-  if (s > 59) {
-    extra += Math.floor(s / 60);
-    s %= 60;
+  while (ms < 0) {
+    s -= 1;
+    ms += 1000;
   }
-  m += extra;
-  extra = 0;
-  if (m > 59) {
-    extra += Math.floor(m / 60);
-    m %= 60;
+  while (s >= 60) {
+    m += 1;
+    s -= 60;
   }
-  h = Math.max(0, h + extra);
-  return { h, m, s, ms: Math.max(0, ms) };
+  while (s < 0) {
+    m -= 1;
+    s += 60;
+  }
+  while (m >= 60) {
+    h += 1;
+    m -= 60;
+  }
+  while (m < 0) {
+    h -= 1;
+    m += 60;
+  }
+  if (h < 0) return { h: 0, m: 0, s: 0, ms: 0 };
+  return { h, m, s, ms };
 }
 
 function partsToSec(p: { h: number; m: number; s: number; ms: number }) {
@@ -91,6 +98,7 @@ const LCD_KEYS = ["h", "m", "s", "ms"] as const;
 function LcdSeek({ playhead }: { playhead: number }) {
   const live = splitTime(playhead);
   const [edit, setEdit] = useState<string[] | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const refs = [
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
@@ -98,6 +106,28 @@ function LcdSeek({ playhead }: { playhead: number }) {
     useRef<HTMLInputElement>(null),
   ];
   const shown = edit ?? [pad(live.h, 2), pad(live.m, 2), pad(live.s, 2), pad(live.ms, 3)];
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onWheel = (e: WheelEvent) => {
+      const hit = (e.target as HTMLElement | null)?.closest("[data-lcd]");
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const i = Number(hit.getAttribute("data-lcd"));
+      if (i < 0 || i > 3) return;
+      const cur = splitTime(useEditor.getState().playhead);
+      const arr = [cur.h, cur.m, cur.s, cur.ms];
+      arr[i] += e.deltaY < 0 ? 1 : -1;
+      const t = partsToSec(clampSeg(arr[0], arr[1], arr[2], arr[3]));
+      seekTo(t);
+      const n = splitTime(t);
+      setEdit((prev) => (prev ? [pad(n.h, 2), pad(n.m, 2), pad(n.s, 2), pad(n.ms, 3)] : prev));
+    };
+    root.addEventListener("wheel", onWheel, { passive: false });
+    return () => root.removeEventListener("wheel", onWheel);
+  }, []);
 
   const commit = (parts: string[]) => {
     const t = partsToSec(
@@ -172,9 +202,9 @@ function LcdSeek({ playhead }: { playhead: number }) {
   };
 
   return (
-    <div className="lcd" title="Playhead — click a segment to type a time">
+    <div ref={rootRef} className="lcd" title="Playhead — click a segment to type, scroll to nudge">
       {LCD_KEYS.map((key, i) => (
-        <span key={key} className="lcd-chunk">
+        <span key={key} className="lcd-chunk" data-lcd={i}>
           {i > 0 ? <span className="lcd-sep">{i === 3 ? "." : ":"}</span> : null}
           <input
             ref={refs[i]}

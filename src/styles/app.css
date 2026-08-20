@@ -661,6 +661,7 @@ html.is-live-resize body {
 .lcd-chunk {
   display: inline-flex;
   align-items: baseline;
+  cursor: ns-resize;
 }
 
 .lcd-sep {
