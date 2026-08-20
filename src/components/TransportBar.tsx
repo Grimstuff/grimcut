@@ -1,20 +1,231 @@
 import { useEffect, useRef, useState } from "react";
 import { AR_PRESETS, RES_BY_AR, arOf } from "../core/canvas";
 import { useEditor } from "../store/editorStore";
-import { applyPreviewVolume, togglePlayback } from "../lib/playbackClock";
+import { applyPreviewVolume, noteUserSeek, syncPreviewToPlayhead, togglePlayback } from "../lib/playbackClock";
 
 function pad(n: number, w: number) {
   return String(n).padStart(w, "0");
 }
 
-function lcdTime(t: number) {
+function splitTime(t: number) {
   if (!Number.isFinite(t) || t < 0) t = 0;
   const ms = Math.floor((t % 1) * 1000);
   const total = Math.floor(t);
-  const s = total % 60;
-  const m = Math.floor(total / 60) % 60;
-  const h = Math.floor(total / 3600);
-  return `${pad(h, 2)}:${pad(m, 2)}:${pad(s, 2)}.${pad(ms, 3)}`;
+  return {
+    h: Math.floor(total / 3600),
+    m: Math.floor(total / 60) % 60,
+    s: total % 60,
+    ms,
+  };
+}
+
+function clampSeg(h: number, m: number, s: number, ms: number) {
+  let extra = 0;
+  if (ms > 999) {
+    extra += Math.floor(ms / 1000);
+    ms %= 1000;
+  }
+  s += extra;
+  extra = 0;
+  if (s > 59) {
+    extra += Math.floor(s / 60);
+    s %= 60;
+  }
+  m += extra;
+  extra = 0;
+  if (m > 59) {
+    extra += Math.floor(m / 60);
+    m %= 60;
+  }
+  h = Math.max(0, h + extra);
+  return { h, m, s, ms: Math.max(0, ms) };
+}
+
+function partsToSec(p: { h: number; m: number; s: number; ms: number }) {
+  const c = clampSeg(p.h, p.m, p.s, p.ms);
+  return c.h * 3600 + c.m * 60 + c.s + c.ms / 1000;
+}
+
+/** Parse 1:23:45.678, 1:23, 45.5, or a digit dump like 010203400 / 1500. */
+function parseFlexibleTime(raw: string): number | null {
+  const t = raw.trim().replace(/,/g, ".").replace(/[^\d:.]/g, "");
+  if (!t) return null;
+  if (/[:.]/.test(t)) {
+    const dot = t.lastIndexOf(".");
+    const main = dot >= 0 ? t.slice(0, dot) : t;
+    const frac = dot >= 0 ? t.slice(dot + 1) : "";
+    const parts = main.split(":").filter((x) => x.length > 0);
+    let h = 0;
+    let m = 0;
+    let s = 0;
+    if (parts.length >= 3) {
+      h = Number(parts[0]) || 0;
+      m = Number(parts[1]) || 0;
+      s = Number(parts[2]) || 0;
+    } else if (parts.length === 2) {
+      m = Number(parts[0]) || 0;
+      s = Number(parts[1]) || 0;
+    } else {
+      s = Number(parts[0]) || 0;
+    }
+    const ms = Number((frac + "000").slice(0, 3)) || 0;
+    return partsToSec(clampSeg(h, m, s, ms));
+  }
+  const d = t.replace(/\D/g, "");
+  if (!d) return null;
+  const p = d.padStart(9, "0").slice(-9);
+  return partsToSec(
+    clampSeg(Number(p.slice(0, 2)), Number(p.slice(2, 4)), Number(p.slice(4, 6)), Number(p.slice(6, 9))),
+  );
+}
+
+function seekTo(t: number) {
+  useEditor.getState().setPlayhead(t);
+  noteUserSeek();
+  syncPreviewToPlayhead();
+}
+
+const LCD_MAX = [2, 2, 2, 3] as const;
+const LCD_KEYS = ["h", "m", "s", "ms"] as const;
+
+function LcdSeek({ playhead }: { playhead: number }) {
+  const live = splitTime(playhead);
+  const [edit, setEdit] = useState<string[] | null>(null);
+  const refs = [
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+  ];
+  const shown = edit ?? [pad(live.h, 2), pad(live.m, 2), pad(live.s, 2), pad(live.ms, 3)];
+
+  const commit = (parts: string[]) => {
+    const t = partsToSec(
+      clampSeg(Number(parts[0]) || 0, Number(parts[1]) || 0, Number(parts[2]) || 0, Number(parts[3]) || 0),
+    );
+    seekTo(t);
+    const n = splitTime(t);
+    setEdit([pad(n.h, 2), pad(n.m, 2), pad(n.s, 2), pad(n.ms, 3)]);
+  };
+
+  const startEdit = (i: number) => {
+    const n = splitTime(useEditor.getState().playhead);
+    setEdit([pad(n.h, 2), pad(n.m, 2), pad(n.s, 2), pad(n.ms, 3)]);
+    requestAnimationFrame(() => refs[i].current?.select());
+  };
+
+  const onPaste = (e: React.ClipboardEvent, i: number) => {
+    const text = e.clipboardData.getData("text");
+    const t = parseFlexibleTime(text);
+    if (t == null) return;
+    e.preventDefault();
+    seekTo(t);
+    const n = splitTime(t);
+    setEdit([pad(n.h, 2), pad(n.m, 2), pad(n.s, 2), pad(n.ms, 3)]);
+    refs[Math.min(3, i)].current?.blur();
+    setEdit(null);
+  };
+
+  const onChange = (i: number, raw: string) => {
+    if (/[:.]/.test(raw) || raw.replace(/\D/g, "").length > LCD_MAX[i]) {
+      const t = parseFlexibleTime(raw);
+      if (t != null) {
+        seekTo(t);
+        const n = splitTime(t);
+        const parts = [pad(n.h, 2), pad(n.m, 2), pad(n.s, 2), pad(n.ms, 3)];
+        setEdit(parts);
+        const digits = raw.replace(/\D/g, "");
+        let idx = i;
+        let used = 0;
+        for (let k = i; k < 4; k++) {
+          used += LCD_MAX[k];
+          idx = k;
+          if (digits.length <= used) break;
+        }
+        requestAnimationFrame(() => refs[idx].current?.select());
+        return;
+      }
+    }
+    const digits = raw.replace(/\D/g, "");
+    const next = [...(edit ?? shown)];
+    let cur = digits;
+    let f = i;
+    while (f < 4) {
+      const max = LCD_MAX[f];
+      if (cur.length <= max) {
+        next[f] = cur;
+        if (cur.length === max && f < 3) f++;
+        break;
+      }
+      next[f] = cur.slice(0, max);
+      cur = cur.slice(max);
+      f++;
+      if (f === 4) {
+        next[3] = (next[3] + cur).slice(0, 3);
+        f = 3;
+        break;
+      }
+    }
+    setEdit(next);
+    commit(next);
+    if (f !== i) requestAnimationFrame(() => refs[f].current?.select());
+  };
+
+  return (
+    <div className="lcd" title="Playhead — click a segment to type a time">
+      {LCD_KEYS.map((key, i) => (
+        <span key={key} className="lcd-chunk">
+          {i > 0 ? <span className="lcd-sep">{i === 3 ? "." : ":"}</span> : null}
+          <input
+            ref={refs[i]}
+            className="lcd-seg"
+            inputMode="numeric"
+            aria-label={key === "ms" ? "milliseconds" : key === "h" ? "hours" : key === "m" ? "minutes" : "seconds"}
+            value={shown[i]}
+            onFocus={() => startEdit(i)}
+            onBlur={() => {
+              if (edit) commit(edit);
+              setTimeout(() => {
+                if (!refs.some((r) => r.current === document.activeElement)) setEdit(null);
+              }, 0);
+            }}
+            onPaste={(e) => onPaste(e, i)}
+            onChange={(e) => onChange(i, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                if (edit) commit(edit);
+                (e.target as HTMLInputElement).blur();
+              }
+              if (e.key === "Escape") {
+                setEdit(null);
+                (e.target as HTMLInputElement).blur();
+              }
+              if (e.key === ":" || e.key === "." || e.key === "Tab") {
+                if (e.key !== "Tab") e.preventDefault();
+                const dir = e.shiftKey ? -1 : 1;
+                const j = Math.max(0, Math.min(3, i + dir));
+                if (e.key !== "Tab" || !e.shiftKey) {
+                  if (e.key !== "Tab") refs[j].current?.select();
+                }
+              }
+              if (e.key === "ArrowRight" && (e.target as HTMLInputElement).selectionStart === shown[i].length) {
+                e.preventDefault();
+                refs[Math.min(3, i + 1)].current?.select();
+              }
+              if (e.key === "ArrowLeft" && (e.target as HTMLInputElement).selectionStart === 0) {
+                e.preventDefault();
+                refs[Math.max(0, i - 1)].current?.select();
+              }
+              if (e.key === "Backspace" && !(e.target as HTMLInputElement).value) {
+                e.preventDefault();
+                refs[Math.max(0, i - 1)].current?.select();
+              }
+            }}
+          />
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function IconPlay() {
@@ -353,9 +564,7 @@ export function TransportBar() {
         >
           {playing ? <IconPause /> : <IconPlay />}
         </button>
-        <div className="lcd" title="Playhead">
-          {lcdTime(playhead)}
-        </div>
+        <LcdSeek playhead={playhead} />
         <button type="button" className="icon-btn icon-btn-lg is-record" title="Record (coming later)" disabled>
           <IconRecord />
         </button>

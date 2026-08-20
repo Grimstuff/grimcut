@@ -643,19 +643,52 @@ html.is-live-resize body {
 }
 
 .lcd {
+  display: inline-flex;
+  align-items: baseline;
   font-family: "Cascadia Mono", "Consolas", "Segoe UI Monospace", ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
   font-size: 15px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   color: #9ad4ff;
   background: #141416;
   border: 1px solid #2c2c32;
   border-radius: 2px;
-  padding: 3px 8px 4px;
+  padding: 3px 6px 4px;
   text-shadow: 0 0 10px rgba(120, 190, 255, 0.35);
-  min-width: 11.6ch;
-  text-align: center;
   line-height: 1.2;
+}
+
+.lcd-chunk {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.lcd-sep {
+  opacity: 0.4;
+  user-select: none;
+  pointer-events: none;
+}
+
+.lcd-seg {
+  width: 2.15ch;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-shadow: inherit;
+  text-align: center;
+  padding: 0;
+  margin: 0;
+}
+
+.lcd-chunk:last-child .lcd-seg {
+  width: 3.2ch;
+}
+
+.lcd-seg:focus {
+  outline: none;
+  background: rgba(154, 212, 255, 0.14);
 }
 
 .icon-btn {
