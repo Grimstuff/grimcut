@@ -248,7 +248,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   del: () => {
-    if (get().range) {
+    const span = get().range;
+    if (span && Math.abs(span.end - span.start) > 0.04) {
       get().liftRange();
       return;
     }

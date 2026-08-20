@@ -291,6 +291,8 @@ html.is-live-resize body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .timeline-head {
@@ -343,6 +345,7 @@ html.is-live-resize body {
   overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
+  touch-action: none;
 }
 
 .tl-scroll:hover {

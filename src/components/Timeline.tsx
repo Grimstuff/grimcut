@@ -25,14 +25,117 @@ function seekVideo(t: number) {
 
 const GUTTER = 22;
 const NO_KEYFRAMES: number[] = [];
+const LISTEN = "__grimcutTlListen";
+
+type ListenWin = Window & {
+  [LISTEN]?: { move: (e: Event) => void; up: (e: Event) => void };
+};
+
+let drag: Drag | null = null;
+let scrollerEl: HTMLDivElement | null = null;
+let trackWNow = 800;
+let applyLock: (v: { pps: number; total: number } | null) => void = () => {};
+const metrics = { pps: 80, total: 1 };
+
+function timeAt(clientX: number, frozen?: { pps: number; total: number }) {
+  const el = scrollerEl;
+  if (!el) return 0;
+  const m = frozen ?? metrics;
+  const x = clientX - el.getBoundingClientRect().left + el.scrollLeft - GUTTER;
+  return Math.max(0, Math.min(m.total, x / m.pps));
+}
+
+function finishDrag() {
+  const d = drag;
+  drag = null;
+  applyLock(null);
+  if (!d) return;
+  const st = useEditor.getState();
+  if (d.kind === "move" || d.kind === "trimL" || d.kind === "trimR") {
+    st.commit(d.before, d.kind === "move" ? "Move" : "Trim");
+    const p = st.project;
+    if (p) {
+      const newTotal = Math.max(rulerDuration(p), 0.1);
+      const z = (d.pps * newTotal) / trackWNow;
+      if (z > 1.02 && Math.abs(z - st.zoom) > 0.02) {
+        useEditor.setState({ zoom: z });
+      }
+    }
+  }
+  if (d.kind === "box") {
+    const a = Math.min(d.a, d.b);
+    const b = Math.max(d.a, d.b);
+    st.setRange(b - a > 0.04 ? { start: a, end: b, kind: d.track } : null);
+  }
+}
+
+function onDragMove(e: { clientX: number; buttons?: number }) {
+  const d = drag;
+  if (!d) return;
+  if ("buttons" in e && e.buttons === 0) {
+    finishDrag();
+    return;
+  }
+  if (d.kind === "seek") {
+    seekVideo(timeAt(e.clientX, d));
+    return;
+  }
+  if (d.kind === "box") {
+    const t = timeAt(e.clientX, d);
+    drag = { ...d, b: t };
+    useEditor.getState().setRange({ start: Math.min(d.a, t), end: Math.max(d.a, t), kind: d.track });
+    return;
+  }
+  if (d.kind === "pan" && scrollerEl) {
+    scrollerEl.scrollLeft = d.view0 - (e.clientX - d.startX);
+    return;
+  }
+  if (d.kind !== "move" && d.kind !== "trimL" && d.kind !== "trimR") return;
+  const delta = (e.clientX - d.startX) / d.pps;
+  const snapSec = Math.min(0.25, Math.max(0.05, 10 / d.pps));
+  const st = useEditor.getState();
+  if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta, snapSec);
+  if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta, snapSec);
+  if (d.kind === "move") st.liveMove(d.id, d.orig + delta, snapSec);
+}
+
+function ensureDragListeners() {
+  const w = window as ListenWin;
+  if (w[LISTEN]) {
+    window.removeEventListener("pointermove", w[LISTEN].move, true);
+    window.removeEventListener("mousemove", w[LISTEN].move, true);
+    window.removeEventListener("pointerup", w[LISTEN].up, true);
+    window.removeEventListener("mouseup", w[LISTEN].up, true);
+    window.removeEventListener("pointercancel", w[LISTEN].up, true);
+  }
+  const move = (e: Event) => onDragMove(e as MouseEvent);
+  const up = () => finishDrag();
+  w[LISTEN] = { move, up };
+  window.addEventListener("pointermove", move, true);
+  window.addEventListener("mousemove", move, true);
+  window.addEventListener("pointerup", up, true);
+  window.addEventListener("mouseup", up, true);
+  window.addEventListener("pointercancel", up, true);
+}
+
+function armDrag(e: PointerEvent, next: Drag, lock?: { pps: number; total: number }) {
+  e.preventDefault();
+  e.stopPropagation();
+  drag = next;
+  if (lock) applyLock(lock);
+  try {
+    scrollerEl?.setPointerCapture(e.pointerId);
+  } catch {
+    /* not capturable */
+  }
+}
 
 export function Timeline() {
   const scroller = useRef<HTMLDivElement>(null);
-  const drag = useRef<Drag | null>(null);
   const [trackW, setTrackW] = useState(800);
-  const trackWRef = useRef(trackW);
-  trackWRef.current = trackW;
+  trackWNow = trackW;
   const [lock, setLock] = useState<{ pps: number; total: number } | null>(null);
+  applyLock = setLock;
 
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
@@ -64,18 +167,11 @@ export function Timeline() {
   const fitted = zoom <= 1.001 && !lock;
   const width = fitted ? trackW : Math.ceil(layoutTotal * pps);
 
-  const metrics = useRef({ pps, total });
-  metrics.current = { pps, total };
-
-  const timeAt = (clientX: number, frozen?: { pps: number; total: number }) => {
-    const el = scroller.current;
-    if (!el) return 0;
-    const m = frozen ?? metrics.current;
-    const x = clientX - el.getBoundingClientRect().left + el.scrollLeft - GUTTER;
-    return Math.max(0, Math.min(m.total, x / m.pps));
-  };
+  metrics.pps = pps;
+  metrics.total = total;
 
   useEffect(() => {
+    ensureDragListeners();
     const el = scroller.current;
     if (!el) return;
     const wheel = (e: WheelEvent) => {
@@ -92,65 +188,6 @@ export function Timeline() {
     el.addEventListener("wheel", wheel, { passive: false });
     return () => el.removeEventListener("wheel", wheel);
   }, [project]);
-
-  useEffect(() => {
-    const onMove = (e: globalThis.PointerEvent) => {
-      const d = drag.current;
-      if (!d) return;
-      if (d.kind === "seek") {
-        seekVideo(timeAt(e.clientX, d));
-        return;
-      }
-      if (d.kind === "box") {
-        const t = timeAt(e.clientX, d);
-        drag.current = { ...d, b: t };
-        useEditor.getState().setRange({ start: Math.min(d.a, t), end: Math.max(d.a, t), kind: d.track });
-        return;
-      }
-      if (d.kind === "pan" && scroller.current) {
-        scroller.current.scrollLeft = d.view0 - (e.clientX - d.startX);
-        return;
-      }
-      if (d.kind !== "move" && d.kind !== "trimL" && d.kind !== "trimR") return;
-      const delta = (e.clientX - d.startX) / d.pps;
-      const snapSec = Math.min(0.25, Math.max(0.05, 10 / d.pps));
-      const st = useEditor.getState();
-      if (d.kind === "trimL") st.liveTrim(d.id, "left", d.orig + delta, snapSec);
-      if (d.kind === "trimR") st.liveTrim(d.id, "right", d.orig + delta, snapSec);
-      if (d.kind === "move") st.liveMove(d.id, d.orig + delta, snapSec);
-    };
-    const onUp = () => {
-      const d = drag.current;
-      if (!d) return;
-      const st = useEditor.getState();
-      if (d.kind === "move" || d.kind === "trimL" || d.kind === "trimR") {
-        st.commit(d.before, d.kind === "move" ? "Move" : "Trim");
-        const p = st.project;
-        if (p) {
-          const newTotal = Math.max(rulerDuration(p), 0.1);
-          const z = (d.pps * newTotal) / trackWRef.current;
-          if (z > 1.02 && Math.abs(z - st.zoom) > 0.02) {
-            useEditor.setState({ zoom: z });
-          }
-        }
-      }
-      if (d.kind === "box") {
-        const a = Math.min(d.a, d.b);
-        const b = Math.max(d.a, d.b);
-        st.setRange(b - a > 0.04 ? { start: a, end: b, kind: d.track } : null);
-      }
-      drag.current = null;
-      setLock(null);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-  }, []);
 
   useEffect(() => {
     const el = scroller.current;
@@ -170,30 +207,31 @@ export function Timeline() {
   const startBox = (kind: ClipKind, e: PointerEvent) => {
     if ((e.target as HTMLElement).closest(".handle, .clip-grip, .playhead-hit, .link-btn")) return;
     if (e.button === 1) {
-      drag.current = { kind: "pan", startX: e.clientX, view0: scroller.current?.scrollLeft ?? 0 };
+      armDrag(e, { kind: "pan", startX: e.clientX, view0: scrollerEl?.scrollLeft ?? 0 });
       return;
     }
     if (e.button !== 0) return;
     const t = timeAt(e.clientX);
-    drag.current = { kind: "box", track: kind, a: t, b: t, pps, total };
-    setLock({ pps, total });
+    armDrag(e, { kind: "box", track: kind, a: t, b: t, pps, total }, { pps, total });
     useEditor.getState().setRange({ start: t, end: t, kind });
     seekVideo(t);
   };
 
   const startEdit = (kind: "move" | "trimL" | "trimR", clip: Clip, e: PointerEvent, orig: number) => {
-    e.stopPropagation();
     if (e.button !== 0) return;
     useEditor.getState().select(clip.id);
-    setLock({ pps, total });
-    drag.current = {
-      kind,
-      id: clip.id,
-      startX: e.clientX,
-      orig,
-      before: useEditor.getState().snapshot() ?? [],
-      pps,
-    };
+    armDrag(
+      e,
+      {
+        kind,
+        id: clip.id,
+        startX: e.clientX,
+        orig,
+        before: useEditor.getState().snapshot() ?? [],
+        pps,
+      },
+      { pps, total },
+    );
   };
 
   const renderLane = (kind: ClipKind) => {
@@ -269,7 +307,7 @@ export function Timeline() {
           <button type="button" title="Slice at playhead (S / double-click)" onClick={() => useEditor.getState().slice()}>
             Slice
           </button>
-          <button type="button" disabled={!selected && !range} onClick={() => useEditor.getState().del()}>
+          <button type="button" disabled={!selected && rangeDur <= 0.04} onClick={() => useEditor.getState().del()}>
             Delete
           </button>
           <button
@@ -306,18 +344,24 @@ export function Timeline() {
           </button>
         </div>
       </div>
-      <div ref={scroller} className={`tl-scroll${fitted ? " is-fitted" : ""}`}>
+      <div
+        ref={(el) => {
+          scroller.current = el;
+          scrollerEl = el;
+        }}
+        className={`tl-scroll${fitted ? " is-fitted" : ""}`}
+        onPointerMove={(e) => onDragMove(e)}
+        onPointerUp={() => finishDrag()}
+      >
         {renderLane("video")}
         {renderLane("audio")}
         <div
           className="playhead-hit"
           style={{ left: playhead * pps + GUTTER }}
           onPointerDown={(e) => {
-            e.stopPropagation();
             if (e.button !== 0) return;
             seekVideo(timeAt(e.clientX));
-            setLock({ pps, total });
-            drag.current = { kind: "seek", pps, total };
+            armDrag(e, { kind: "seek", pps, total }, { pps, total });
           }}
         />
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />
