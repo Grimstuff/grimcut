@@ -1,5 +1,5 @@
 import { useEditor } from "../store/editorStore";
-import { togglePlayback } from "./playbackClock";
+import { noteUserSeek, syncPreviewToPlayhead, togglePlayback } from "./playbackClock";
 
 const KEYS = "__grimcutKeys";
 type KeysWin = Window & { [KEYS]?: (e: KeyboardEvent) => void };
@@ -52,6 +52,15 @@ function onKey(e: KeyboardEvent) {
   if (e.code === "Delete" || e.code === "Backspace") {
     e.preventDefault();
     st.del();
+  }
+  if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
+    e.preventDefault();
+    if (st.playing) st.setPlaying(false);
+    const fps = st.media?.frameRate;
+    const dt = 1 / (fps && fps > 1 && fps < 240 ? fps : 30);
+    st.setPlayhead(st.playhead + (e.code === "ArrowRight" ? dt : -dt));
+    noteUserSeek();
+    syncPreviewToPlayhead();
   }
 }
 
