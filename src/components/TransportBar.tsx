@@ -8,9 +8,9 @@ function pad(n: number, w: number) {
 }
 
 function splitTime(t: number) {
-  if (!Number.isFinite(t) || t < 0) t = 0;
-  const ms = Math.floor((t % 1) * 1000);
-  const total = Math.floor(t);
+  const totalMs = Math.max(0, Math.round((Number.isFinite(t) ? t : 0) * 1000));
+  const ms = totalMs % 1000;
+  const total = Math.floor(totalMs / 1000);
   return {
     h: Math.floor(total / 3600),
     m: Math.floor(total / 60) % 60,
@@ -50,7 +50,7 @@ function clampSeg(h: number, m: number, s: number, ms: number) {
 
 function partsToSec(p: { h: number; m: number; s: number; ms: number }) {
   const c = clampSeg(p.h, p.m, p.s, p.ms);
-  return c.h * 3600 + c.m * 60 + c.s + c.ms / 1000;
+  return (c.h * 3600000 + c.m * 60000 + c.s * 1000 + c.ms) / 1000;
 }
 
 /** Parse 1:23:45.678, 1:23, 45.5, or a digit dump like 010203400 / 1500. */
