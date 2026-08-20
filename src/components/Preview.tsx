@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
-import { mapTimelineToSource } from "../core/project";
 import { useEditor } from "../store/editorStore";
-import { markVideoSeekDone, resetPlaybackClock, setPreviewVideo } from "../lib/playbackClock";
+import { markVideoSeekDone, setPreviewVideo, togglePlayback } from "../lib/playbackClock";
 
 export function Preview() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -17,32 +16,13 @@ export function Preview() {
     const clear = () => markVideoSeekDone();
     v.addEventListener("seeked", clear);
     v.addEventListener("playing", clear);
+    v.addEventListener("canplay", clear);
     return () => {
       v.removeEventListener("seeked", clear);
       v.removeEventListener("playing", clear);
-      setPreviewVideo(null);
+      v.removeEventListener("canplay", clear);
     };
   }, [previewUrl]);
-
-  const onPreviewClick = () => {
-    const st = useEditor.getState();
-    if (st.playing) {
-      st.setPlaying(false);
-      videoRef.current?.pause();
-      return;
-    }
-    resetPlaybackClock();
-    const mapped = st.project ? mapTimelineToSource(st.project, st.playhead) : null;
-    const v = videoRef.current;
-    if (v && mapped) {
-      try {
-        v.currentTime = mapped.source;
-      } catch {
-        /* ignore */
-      }
-    }
-    st.togglePlay();
-  };
 
   if (!previewUrl) {
     return (
@@ -60,14 +40,17 @@ export function Preview() {
   }
 
   return (
-    <div className="preview-wrap" onClick={onPreviewClick} title="Click or Space to play/pause">
+    <div className="preview-wrap" onClick={() => togglePlayback()} title="Click or Space to play/pause">
       <video
-        ref={videoRef}
+        ref={(el) => {
+          videoRef.current = el;
+          setPreviewVideo(el);
+        }}
         src={previewUrl}
         tabIndex={-1}
         playsInline
+        preload="auto"
         disablePictureInPicture
-        onMouseDown={(e) => e.preventDefault()}
         onLoadedMetadata={() => {
           const v = videoRef.current;
           if (!v) return;

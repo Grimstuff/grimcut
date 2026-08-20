@@ -1,4 +1,5 @@
 import { mapTimelineToSource, timelineDuration } from "../core/project";
+import { clipEnd } from "../core/types";
 import { useEditor } from "../store/editorStore";
 
 const RAF_KEY = "__grimcutPlaybackRaf";
@@ -13,17 +14,67 @@ let fileSeeking = false;
 
 export function setPreviewVideo(el: HTMLVideoElement | null) {
   videoEl = el;
-  lastClipId = null;
-  fileSeeking = false;
 }
 
 export function markVideoSeekDone() {
   fileSeeking = false;
 }
 
-export function resetPlaybackClock() {
+function seekIfNeeded(v: HTMLVideoElement, source: number) {
+  if (!Number.isFinite(v.currentTime) || Math.abs(v.currentTime - source) > 0.05) {
+    fileSeeking = true;
+    try {
+      v.currentTime = Math.max(0, source);
+    } catch {
+      fileSeeking = false;
+    }
+  }
+}
+
+function playVideo(v: HTMLVideoElement, fromUser: boolean) {
+  const p = v.play();
+  if (p && typeof p.catch === "function") {
+    void p.catch((err: unknown) => {
+      if (!fromUser) return;
+      useEditor.setState({
+        playing: false,
+        status: `Preview play failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    });
+  }
+}
+
+/** Space and click both hit this. Must call video.play() on the same user-gesture stack. */
+export function togglePlayback() {
+  const st = useEditor.getState();
+  if (st.menuOpen) {
+    st.setMenuOpen(false);
+    return;
+  }
+  if (!st.project) return;
+
+  const v = videoEl;
+  if (st.playing) {
+    st.setPlaying(false);
+    lastWall = 0;
+    v?.pause();
+    return;
+  }
+
   lastWall = 0;
-  lastClipId = null;
+  fileSeeking = false;
+  st.setPlaying(true);
+
+  const mapped = mapTimelineToSource(st.project, st.playhead);
+  if (!mapped) {
+    lastClipId = null;
+    v?.pause();
+    return;
+  }
+  lastClipId = mapped.clip.id;
+  if (!v) return;
+  seekIfNeeded(v, mapped.source);
+  playVideo(v, true);
 }
 
 function tick(now: number) {
@@ -43,50 +94,57 @@ function tick(now: number) {
     return;
   }
 
-  const dt = lastWall ? Math.min(0.08, (now - lastWall) / 1000) : 0;
-  lastWall = now;
   const end = Math.max(timelineDuration(p), 0.01);
-  const ph = Math.min(end, st.playhead + dt);
+  const mapped = mapTimelineToSource(p, st.playhead);
 
-  if (ph >= end - 0.0005) {
+  if (st.playhead >= end - 0.0005) {
     useEditor.setState({ playhead: end, showBlack: true, playing: false });
     lastWall = 0;
-    if (v && !v.paused) v.pause();
+    v?.pause();
     return;
   }
 
-  const mapped = mapTimelineToSource(p, ph);
   if (!mapped) {
+    const dt = lastWall ? Math.min(0.08, (now - lastWall) / 1000) : 0;
+    lastWall = now;
     lastClipId = null;
+    const ph = Math.min(end, st.playhead + dt);
     useEditor.setState({ playhead: ph, showBlack: true });
     if (v && !v.paused) v.pause();
     return;
   }
 
-  useEditor.setState({ playhead: ph, showBlack: false, selectedId: mapped.clip.id });
-  if (!v) return;
-
-  const changed = lastClipId !== mapped.clip.id;
-  lastClipId = mapped.clip.id;
-  if (changed) {
-    fileSeeking = true;
-    try {
-      v.currentTime = Math.max(0, mapped.source);
-    } catch {
-      /* ignore */
+  if (v && !fileSeeking && !v.paused) {
+    lastWall = now;
+    const src = v.currentTime;
+    const clip = mapped.clip.id === lastClipId || !lastClipId
+      ? mapped.clip
+      : (p.clips.find((c) => c.id === lastClipId) ?? mapped.clip);
+    lastClipId = clip.id;
+    const clipFinish = clipEnd(clip);
+    if (src >= clip.sourceEnd - 0.02) {
+      lastClipId = null;
+      useEditor.setState({ playhead: Math.min(end, clipFinish + 0.001), showBlack: false, selectedId: clip.id });
+      return;
     }
-    void v.play().catch(() => {});
+    const ph = clip.timelineStart + (src - clip.sourceStart);
+    useEditor.setState({
+      playhead: Math.max(clip.timelineStart, Math.min(clipFinish, ph)),
+      showBlack: false,
+      selectedId: clip.id,
+    });
     return;
   }
-  if (!fileSeeking && Math.abs(v.currentTime - mapped.source) > 0.4) {
-    fileSeeking = true;
-    try {
-      v.currentTime = Math.max(0, mapped.source);
-    } catch {
-      /* ignore */
-    }
+
+  // In a clip but the file isn't rolling yet — keep the bar still and start/resume the video.
+  lastWall = now;
+  useEditor.setState({ showBlack: false, selectedId: mapped.clip.id });
+  if (!v) return;
+  if (lastClipId !== mapped.clip.id) {
+    lastClipId = mapped.clip.id;
+    seekIfNeeded(v, mapped.source);
   }
-  if (v.paused && !fileSeeking) void v.play().catch(() => {});
+  if (v.paused && !fileSeeking) playVideo(v, false);
 }
 
 export function startPlaybackClock() {

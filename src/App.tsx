@@ -7,7 +7,7 @@ import { Timeline } from "./components/Timeline";
 import { BusyOverlay } from "./components/BusyOverlay";
 import { useEditor } from "./store/editorStore";
 import { pushAspectLock } from "./lib/fitWindow";
-import { resetPlaybackClock, startPlaybackClock } from "./lib/playbackClock";
+import { startPlaybackClock, togglePlayback } from "./lib/playbackClock";
 
 const KEYS = "__grimcutKeys";
 type KeysWin = Window & { [KEYS]?: (e: KeyboardEvent) => void };
@@ -66,8 +66,7 @@ export default function App() {
         e.stopPropagation();
         if (e.repeat) return;
         if (t && t.tagName === "BUTTON") t.blur();
-        if (!st.playing && st.project) resetPlaybackClock();
-        st.togglePlay();
+        togglePlayback();
         return;
       }
       if (e.ctrlKey && e.code === "KeyO") {
