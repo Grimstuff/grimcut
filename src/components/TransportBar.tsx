@@ -216,21 +216,27 @@ export function TransportBar() {
           >
             <IconSpeaker muted={muted} />
           </button>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={volume}
-            aria-label="Preview volume"
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              if (v > 0) lastVol.current = v;
-              useEditor.getState().setPreviewVolume(v);
-              applyPreviewVolume(v);
-            }}
-          />
-          {volHint ? <span className="tb-vol-pct">{Math.round(volume * 100)}%</span> : null}
+          <span className="tb-vol-track">
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={volume}
+              aria-label="Preview volume"
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (v > 0) lastVol.current = v;
+                useEditor.getState().setPreviewVolume(v);
+                applyPreviewVolume(v);
+              }}
+            />
+            {volHint ? (
+              <span className="tb-vol-pct" style={{ left: `${volume * 100}%` }}>
+                {Math.round(volume * 100)}%
+              </span>
+            ) : null}
+          </span>
         </div>
         <div className="tb-canvas-wrap">
           <button
