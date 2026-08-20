@@ -166,14 +166,14 @@ export function TransportBar() {
         <div className={`tb-combo${arOpen ? " is-open" : ""}`}>
           <button
             type="button"
-            className="tb-combo-btn"
+            className="tb-combo-face"
             title="Aspect ratio"
             onClick={() => {
               setArOpen((v) => !v);
               setResOpen(false);
             }}
           >
-            {ar}
+            <span>{ar}</span>
             <span className="tb-caret" />
           </button>
           {arOpen ? (
@@ -194,36 +194,39 @@ export function TransportBar() {
             </div>
           ) : null}
         </div>
-        <div className={`tb-combo tb-res${resOpen ? " is-open" : ""}`}>
-          <input
-            className="tb-res-input"
-            value={resText}
-            title="Canvas resolution"
-            onFocus={() => {
-              setResOpen(true);
-              setArOpen(false);
-            }}
-            onChange={(e) => setResText(e.target.value)}
-            onBlur={applyTyped}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                applyTyped();
-                setResOpen(false);
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="tb-caret-btn"
-            title="Common resolutions"
-            onClick={() => {
-              setResOpen((v) => !v);
-              setArOpen(false);
-            }}
-          >
-            <span className="tb-caret" />
-          </button>
+        <div className={`tb-combo${resOpen ? " is-open" : ""}`}>
+          <div className="tb-combo-face">
+            <input
+              className="tb-res-input"
+              value={resText}
+              title="Canvas resolution"
+              onFocus={() => {
+                setResOpen(true);
+                setArOpen(false);
+              }}
+              onChange={(e) => setResText(e.target.value)}
+              onBlur={applyTyped}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  applyTyped();
+                  setResOpen(false);
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="tb-caret-hit"
+              title="Common resolutions"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setResOpen((v) => !v);
+                setArOpen(false);
+              }}
+            >
+              <span className="tb-caret" />
+            </button>
+          </div>
           {resOpen ? (
             <div className="tb-menu tb-menu-wide">
               {resList.map((r) => (
@@ -243,7 +246,10 @@ export function TransportBar() {
             </div>
           ) : null}
         </div>
-        <div className="tb-vol" title="Preview volume">
+      </div>
+
+      <div className="tl-bar-center">
+        <div className="tb-group" title="Preview volume">
           <button
             type="button"
             className="icon-btn"
@@ -277,53 +283,56 @@ export function TransportBar() {
             }}
           />
         </div>
-      </div>
-
-      <div className="tl-bar-center">
-        <div className="lcd" title="Playhead">
-          {lcdTime(playhead)}
+        <div className="tb-group">
+          <button
+            type="button"
+            className={`icon-btn icon-btn-lg${playing ? " is-on" : ""}`}
+            title="Play / pause (Space)"
+            onClick={() => togglePlayback()}
+          >
+            {playing ? <IconPause /> : <IconPlay />}
+          </button>
+          <div className="lcd" title="Playhead">
+            {lcdTime(playhead)}
+          </div>
+          <button type="button" className="icon-btn icon-btn-lg is-record" title="Record (coming later)" disabled>
+            <IconRecord />
+          </button>
         </div>
-        <button
-          type="button"
-          className={`icon-btn icon-btn-lg${playing ? " is-on" : ""}`}
-          title="Play / pause (Space)"
-          onClick={() => togglePlayback()}
-        >
-          {playing ? <IconPause /> : <IconPlay />}
-        </button>
-        <button type="button" className="icon-btn icon-btn-lg is-record" title="Record (coming later)" disabled>
-          <IconRecord />
-        </button>
       </div>
 
       <div className="tl-bar-right">
-        <button
-          type="button"
-          className="icon-btn"
-          title="Cut selected range (Ctrl+X)"
-          disabled={!canCut}
-          onClick={() => useEditor.getState().liftRange()}
-        >
-          <IconCut />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="Delete clip or range (Delete)"
-          disabled={!canDel}
-          onClick={() => useEditor.getState().del()}
-        >
-          <IconDelete />
-        </button>
-        <button
-          type="button"
-          className="icon-btn icon-export"
-          title="Export / save (Ctrl+S)"
-          disabled={busy}
-          onClick={() => void useEditor.getState().exportVideo()}
-        >
-          <IconExport />
-        </button>
+        <div className="tb-group">
+          <button
+            type="button"
+            className="icon-btn"
+            title="Cut selected range (Ctrl+X)"
+            disabled={!canCut}
+            onClick={() => useEditor.getState().liftRange()}
+          >
+            <IconCut />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="Delete clip or range (Delete)"
+            disabled={!canDel}
+            onClick={() => useEditor.getState().del()}
+          >
+            <IconDelete />
+          </button>
+        </div>
+        <div className="tb-group tb-export-group">
+          <button
+            type="button"
+            className="icon-btn icon-export"
+            title="Export / save (Ctrl+S)"
+            disabled={busy}
+            onClick={() => void useEditor.getState().exportVideo()}
+          >
+            <IconExport />
+          </button>
+        </div>
       </div>
     </div>
   );

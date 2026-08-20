@@ -171,6 +171,8 @@ export function Timeline() {
   const peaksByPath = useEditor((s) => s.peaksByPath);
   const mediaByPath = useEditor((s) => s.mediaByPath);
   const dropGhost = useEditor((s) => s.dropGhost);
+  const [tlH, setTlH] = useState(248);
+  const splitDrag = useRef<{ y: number; h: number } | null>(null);
 
   useEffect(() => {
     const measure = () => {
@@ -353,7 +355,26 @@ export function Timeline() {
   };
 
   return (
-    <div className="timeline">
+    <div className="timeline-dock" style={{ height: tlH }}>
+      <div
+        className="tl-split"
+        title="Drag to resize timeline"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          splitDrag.current = { y: e.clientY, h: tlH };
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const d = splitDrag.current;
+          if (!d) return;
+          const max = Math.round(window.innerHeight * 0.72);
+          setTlH(Math.max(200, Math.min(max, d.h - (e.clientY - d.y))));
+        }}
+        onPointerUp={() => {
+          splitDrag.current = null;
+        }}
+      />
+      <div className="timeline">
       <TransportBar />
       <div
         ref={(el) => {
@@ -380,6 +401,7 @@ export function Timeline() {
       <div className="timeline-foot">
         <span>Select · top box moves · drop files onto overlay · Ctrl+X cut · Ctrl+V paste</span>
         <span>{pps.toFixed(0)} px/s</span>
+      </div>
       </div>
     </div>
   );

@@ -407,15 +407,36 @@ html.is-live-resize body {
   pointer-events: none;
 }
 
-.timeline {
+.timeline-dock {
   flex-shrink: 0;
-  height: 196px;
-  padding: 8px 12px 6px;
-  background: var(--gp-surface-elevated);
-  border-top: 1px solid var(--gp-border);
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 200px;
+}
+
+.tl-split {
+  height: 7px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  background: var(--gp-border);
+  border-top: 1px solid var(--gp-border-subtle);
+}
+
+.tl-split:hover,
+.tl-split:active {
+  background: var(--gp-accent);
+}
+
+.timeline {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: 8px 12px 8px;
+  background: var(--gp-surface-elevated);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -427,8 +448,9 @@ html.is-live-resize body {
   align-items: center;
   gap: 8px;
   min-height: 40px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   flex-shrink: 0;
+  overflow: visible;
 }
 
 .tl-bar-left,
@@ -439,64 +461,84 @@ html.is-live-resize body {
   min-width: 0;
 }
 
+.tl-bar-left {
+  justify-content: flex-start;
+}
+
 .tl-bar-right {
   justify-content: flex-end;
-  gap: 2px;
+  gap: 8px;
 }
 
 .tl-bar-center {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+.tb-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  background: var(--gp-surface);
+  border: 1px solid var(--gp-border);
+  border-radius: 8px;
+}
+
+.tb-export-group {
+  padding: 2px;
 }
 
 .tb-combo {
   position: relative;
 }
 
-.tb-combo-btn,
-.tb-res-input,
-.tb-caret-btn {
+.tb-combo-face {
+  display: inline-flex;
+  align-items: center;
   height: 28px;
+  padding: 0 8px 0 10px;
+  gap: 6px;
   border: 1px solid var(--gp-border);
   background: var(--gp-surface);
   color: var(--gp-text);
   border-radius: 6px;
   font-size: 12px;
   font-family: inherit;
-}
-
-.tb-combo-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px 0 10px;
   cursor: pointer;
-  min-width: 58px;
 }
 
-.tb-combo-btn:hover,
-.tb-caret-btn:hover {
+.tb-combo-face:hover {
   background: var(--gp-tab-hover);
 }
 
-.tb-res {
-  display: inline-flex;
-  align-items: stretch;
-}
-
 .tb-res-input {
-  width: 108px;
-  padding: 0 8px;
-  border-right: none;
-  border-radius: 6px 0 0 6px;
+  width: 84px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--gp-text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0;
+  min-width: 0;
 }
 
-.tb-caret-btn {
-  width: 22px;
+.tb-res-input:focus {
+  outline: none;
+}
+
+.tb-caret-hit {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 26px;
   padding: 0;
-  border-radius: 0 6px 6px 0;
+  border: none;
+  background: transparent;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .tb-caret {
@@ -543,16 +585,9 @@ html.is-live-resize body {
   color: var(--gp-text);
 }
 
-.tb-vol {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  margin-left: 4px;
-}
-
-.tb-vol input[type="range"] {
+.tb-group input[type="range"] {
   width: 72px;
-  height: 4px;
+  height: 22px;
   accent-color: var(--gp-accent);
   cursor: pointer;
 }
@@ -611,7 +646,6 @@ html.is-live-resize body {
 }
 
 .icon-export {
-  margin-left: 8px;
   background: var(--gp-accent);
   color: var(--gp-accent-fg);
 }
@@ -851,7 +885,8 @@ html.is-live-resize body {
 .playhead-full {
   position: absolute;
   top: 0;
-  height: 132px;
+  bottom: 0;
+  height: auto;
   width: 2px;
   background: #dc2626;
   pointer-events: none;
