@@ -305,8 +305,15 @@ export function Timeline() {
   };
 
   const renderLane = (kind: ClipKind) => {
-    const base = clipsOn(project, kind, "base");
-    const over = clipsOn(project, kind, "over");
+    const extra = kind === "video" ? "text" : null;
+    const base = [
+      ...clipsOn(project, kind, "base"),
+      ...(extra ? clipsOn(project, extra, "base") : []),
+    ].sort((a, b) => a.timelineStart - b.timelineStart);
+    const over = [
+      ...clipsOn(project, kind, "over"),
+      ...(extra ? clipsOn(project, extra, "over") : []),
+    ].sort((a, b) => a.timelineStart - b.timelineStart);
     return (
       <div
         className={`lane lane-${kind}`}
@@ -505,8 +512,12 @@ function ClipView({
       {ticks.map((x) => (
         <span key={x} className="kf-tick" style={{ left: `${x}%` }} />
       ))}
-      {clip.kind === "audio" ? <Waveform clip={clip} peaks={peaks} sourceDuration={sourceDuration} /> : (
-        <span className="clip-label">{formatTime(dur)}</span>
+      {clip.kind === "audio" ? (
+        <Waveform clip={clip} peaks={peaks} sourceDuration={sourceDuration} />
+      ) : (
+        <span className="clip-label">
+          {clip.kind === "text" ? clip.text?.trim() || "Text" : formatTime(dur)}
+        </span>
       )}
       {overlay ? (
         <span className="layer-tag" title="Overlay (2nd layer)">

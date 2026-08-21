@@ -6,7 +6,7 @@ type KeysWin = Window & { [KEYS]?: (e: KeyboardEvent) => void };
 
 function onKey(e: KeyboardEvent) {
   const t = e.target as HTMLElement | null;
-  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
   const st = useEditor.getState();
   if (st.menuOpen) return;
   if (e.code === "Space" || e.key === " ") {

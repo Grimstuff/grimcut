@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as RE } from "react";
 import { clipAt, clipSourcePath } from "../core/project";
+import { clipEnd, type Clip } from "../core/types";
 import {
   canvasMagnetPoints,
   canvasSnapPoints,
@@ -12,7 +13,7 @@ import {
 } from "../core/canvas";
 import { useEditor } from "../store/editorStore";
 import { markVideoSeekDone, setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead } from "../lib/playbackClock";
-import type { Clip } from "../core/types";
+
 
 type Corner = "nw" | "ne" | "sw" | "se";
 
@@ -50,6 +51,7 @@ function cornerAnchor(rect: { x: number; y: number; w: number; h: number }, corn
 }
 
 function srcSize(clip: Clip) {
+  if (clip.kind === "text") return { w: clip.boxW || 280, h: clip.boxH || 88 };
   const st = useEditor.getState();
   const p = st.project;
   if (!p) return { w: 1920, h: 1080 };
@@ -189,8 +191,12 @@ export function Preview() {
   const ch = project.canvasHeight;
   const baseClip = clipAt(project, playhead, "video", "base");
   const overClip = clipAt(project, playhead, "video", "over");
-  const selected = project.clips.find((c) => c.id === selectedId && c.kind === "video") ?? null;
-  const selectedLive = selected && (selected.id === baseClip?.id || selected.id === overClip?.id) ? selected : null;
+  const textBase = clipAt(project, playhead, "text", "base");
+  const textOver = clipAt(project, playhead, "text", "over");
+  const selected = project.clips.find((c) => c.id === selectedId && (c.kind === "video" || c.kind === "text")) ?? null;
+  const selectedLive =
+    selected && playhead >= selected.timelineStart && playhead < clipEnd(selected) ? selected : null;
+  const editingTextId = useEditor((s) => s.editingTextId);
 
   const toCanvas = (clientX: number, clientY: number) => {
     const el = viewRef.current;
@@ -200,10 +206,10 @@ export function Preview() {
   };
 
   const hitClip = (cx: number, cy: number): Clip | null => {
-    const order = [overClip, baseClip].filter(Boolean) as Clip[];
+    const order = [textOver, textBase, overClip, baseClip].filter(Boolean) as Clip[];
     for (const c of order) {
       const sz = srcSize(c);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(c));
+      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(c), c.kind === "text" ? "text" : "video");
       if (pointInRotatedRect(cx, cy, rect)) return c;
     }
     return null;
@@ -374,7 +380,7 @@ export function Preview() {
       );
     } else if (d.kind === "rotate") {
       const sz = srcSize(clip);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, xf);
+      const rect = clipDrawRect(sz.w, sz.h, cw, ch, xf, clip.kind === "text" ? "text" : "video");
       const ang = Math.atan2(pt.y - rect.cy, pt.x - rect.cx);
       const raw = d.rot0 + ((ang - d.ang0) * 180) / Math.PI;
       const typed = Number.parseFloat(d.typed);
@@ -410,7 +416,7 @@ export function Preview() {
   const placeVideo = (clip: Clip | null) => {
     if (!clip) return { display: "none" as const };
     const sz = srcSize(clip);
-    const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(clip));
+    const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(clip), clip.kind === "text" ? "text" : "video");
     return {
       display: "block" as const,
       left: rect.x,
@@ -422,7 +428,14 @@ export function Preview() {
   };
 
   const bbox = selectedLive
-    ? clipDrawRect(srcSize(selectedLive).w, srcSize(selectedLive).h, cw, ch, clipXf(selectedLive))
+    ? clipDrawRect(
+        srcSize(selectedLive).w,
+        srcSize(selectedLive).h,
+        cw,
+        ch,
+        clipXf(selectedLive),
+        selectedLive.kind === "text" ? "text" : "video",
+      )
     : null;
 
   return (
@@ -464,6 +477,16 @@ export function Preview() {
               disablePictureInPicture
               style={placeVideo(overClip)}
             />
+            {[textOver, textBase].filter(Boolean).map((c) => (
+              <TextBox
+                key={c!.id}
+                clip={c!}
+                cw={cw}
+                ch={ch}
+                selected={selectedId === c!.id}
+                editing={editingTextId === c!.id}
+              />
+            ))}
           </div>
             <div className={`canvas-guides${marksOn ? " is-on" : ""}`} style={{ width: cw, height: ch }}>
               {canvasSnapPoints(cw, ch).map((p) => {
@@ -509,6 +532,85 @@ export function Preview() {
         {cw}×{ch}
         {playing ? " · playing" : ""}
         {selectedLive ? ` · ${selectedLive.layer === "over" ? "layer 2" : "layer 1"}` : ""}
+      </div>
+    </div>
+  );
+}
+
+function TextBox({
+  clip,
+  cw,
+  ch,
+  selected,
+  editing,
+}: {
+  clip: Clip;
+  cw: number;
+  ch: number;
+  selected: boolean;
+  editing: boolean;
+}) {
+  const inner = useRef<HTMLDivElement>(null);
+  const xf = clipXf(clip);
+  const rect = clipDrawRect(clip.boxW || 280, clip.boxH || 88, cw, ch, xf, "text");
+
+  useEffect(() => {
+    if (!editing || !inner.current) return;
+    inner.current.innerText = clip.text ?? "";
+    inner.current.focus();
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(inner.current);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }, [editing]);
+
+  const measure = () => {
+    const el = inner.current;
+    if (!el) return;
+    const w = Math.ceil(Math.max(48, el.scrollWidth + 8));
+    const h = Math.ceil(Math.max(36, el.scrollHeight + 6));
+    if (w !== clip.boxW || h !== clip.boxH) useEditor.getState().setTextProps(clip.id, { boxW: w, boxH: h });
+  };
+
+  return (
+    <div
+      className={`text-layer${selected ? " is-sel" : ""}${editing ? " is-edit" : ""}`}
+      style={{
+        left: rect.x,
+        top: rect.y,
+        minWidth: rect.w,
+        minHeight: rect.h,
+        transform: `rotate(${rect.rotation}deg)`,
+        fontFamily: clip.fontFamily ?? "Segoe UI",
+        fontSize: clip.fontSize ?? 64,
+        color: clip.textColor ?? "#fff",
+        textAlign: clip.textAlign ?? "center",
+      }}
+      onPointerDown={(e) => {
+        if (editing) e.stopPropagation();
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        useEditor.getState().setEditingText(clip.id);
+      }}
+    >
+      <div
+        ref={inner}
+        className="text-layer-inner"
+        contentEditable={editing}
+        suppressContentEditableWarning
+        onInput={(e) => {
+          useEditor.getState().setTextProps(clip.id, { text: e.currentTarget.innerText });
+          requestAnimationFrame(measure);
+        }}
+        onBlur={() => {
+          measure();
+          useEditor.getState().setEditingText(null);
+        }}
+      >
+        {editing ? null : clip.text?.trim() ? clip.text : "Text"}
       </div>
     </div>
   );

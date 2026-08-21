@@ -21,6 +21,7 @@ import {
   chunkFromRange,
   tryDelete,
   tryAddOverlayFromMedia,
+  tryAddText,
   tryLiftRange,
   tryMove,
   tryPaste,
@@ -110,6 +111,10 @@ type EditorState = {
   setCanvasPreset: (id: string) => void;
   setPreviewVolume: (v: number) => void;
   liveTransform: (id: string, xf: ClipTransform) => void;
+  addTextClip: () => void;
+  setTextProps: (id: string, patch: Partial<Clip>) => void;
+  setEditingText: (id: string | null) => void;
+  editingTextId: string | null;
   exportVideo: () => Promise<void>;
 };
 
@@ -160,6 +165,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   menuOpen: false,
   progress: null,
   previewVolume: 1,
+  editingTextId: null,
 
   setPlaying: (v) => set({ playing: v }),
   togglePlay: () => {
@@ -450,7 +456,11 @@ export const useEditor = create<EditorState>((set, get) => ({
     set(syncHist({ project: { ...p, clips } }));
   },
 
-  select: (id) => set({ selectedId: id }),
+  select: (id) =>
+    set({
+      selectedId: id,
+      editingTextId: id && id === get().editingTextId ? get().editingTextId : null,
+    }),
 
   liveTrim: (id, edge, sourceEdge, snapSec = 0.12, from) => {
     const p = get().project;
@@ -658,6 +668,36 @@ export const useEditor = create<EditorState>((set, get) => ({
         ...p,
         clips: p.clips.map((c) => (c.id === id ? { ...c, transform: { ...xf } } : c)),
       },
+    });
+  },
+
+  setEditingText: (id) => set({ editingTextId: id, selectedId: id ?? get().selectedId }),
+
+  setTextProps: (id, patch) => {
+    const p = get().project;
+    if (!p) return;
+    set({
+      project: {
+        ...p,
+        clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+      },
+    });
+  },
+
+  addTextClip: () => {
+    const p = get().project;
+    if (!p) return;
+    const r = tryAddText(p, get().playhead);
+    if (!r.ok) {
+      set({ status: r.error });
+      return;
+    }
+    const added = r.clips.find((c) => c.kind === "text" && !p.clips.some((o) => o.id === c.id));
+    applyClips(get, set, r.clips, "Text layer");
+    set({
+      selectedId: added?.id ?? get().selectedId,
+      editingTextId: added?.id ?? null,
+      status: "Text layer — type on the canvas",
     });
   },
 

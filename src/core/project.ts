@@ -257,9 +257,23 @@ export type CompLayer = {
   srcHeight: number;
 };
 
+export type CompText = {
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  align: string;
+  color: string;
+  x: number;
+  y: number;
+  rotation: number;
+  boxW: number;
+  boxH: number;
+};
+
 export type CompSlice = {
   duration: number;
   layers: CompLayer[];
+  texts: CompText[];
 };
 
 function mediaSize(path: string, fallback: MediaInfo, byPath: Record<string, MediaInfo>) {
@@ -275,7 +289,7 @@ export function flattenCanvas(
   const end = timelineDuration(p);
   if (end <= 0) return [];
   const marks = new Set<number>([0, end]);
-  for (const c of clipsOn(p, "video")) {
+  for (const c of [...clipsOn(p, "video"), ...clipsOn(p, "text")]) {
     marks.add(c.timelineStart);
     marks.add(clipEnd(c));
   }
@@ -287,27 +301,45 @@ export function flattenCanvas(
     if (b - a < 0.01) continue;
     const mid = (a + b) / 2;
     const layers: CompLayer[] = [];
+    const texts: CompText[] = [];
     for (const layer of ["base", "over"] as const) {
       const c = clipAt(p, mid, "video", layer);
-      if (!c) continue;
-      const path = clipSourcePath(p, c);
-      const size = mediaSize(path, fallback, byPath);
-      const xf: ClipTransform = clipXf(c);
-      layers.push({
-        sourcePath: path,
-        sourceStart: c.sourceStart + (a - c.timelineStart),
-        sourceEnd: c.sourceStart + (b - c.timelineStart),
-        x: xf.x,
-        y: xf.y,
-        scale: xf.scale,
-        scaleX: xfScaleX(xf),
-        scaleY: xfScaleY(xf),
-        rotation: xf.rotation,
-        srcWidth: size.w,
-        srcHeight: size.h,
-      });
+      if (c) {
+        const path = clipSourcePath(p, c);
+        const size = mediaSize(path, fallback, byPath);
+        const xf: ClipTransform = clipXf(c);
+        layers.push({
+          sourcePath: path,
+          sourceStart: c.sourceStart + (a - c.timelineStart),
+          sourceEnd: c.sourceStart + (b - c.timelineStart),
+          x: xf.x,
+          y: xf.y,
+          scale: xf.scale,
+          scaleX: xfScaleX(xf),
+          scaleY: xfScaleY(xf),
+          rotation: xf.rotation,
+          srcWidth: size.w,
+          srcHeight: size.h,
+        });
+      }
+      const tx = clipAt(p, mid, "text", layer);
+      if (tx && (tx.text ?? "").length) {
+        const xf = clipXf(tx);
+        texts.push({
+          text: tx.text ?? "",
+          fontFamily: tx.fontFamily ?? "Segoe UI",
+          fontSize: (tx.fontSize ?? 64) * xfScaleY(xf),
+          align: tx.textAlign ?? "center",
+          color: tx.textColor ?? "#ffffff",
+          x: xf.x,
+          y: xf.y,
+          rotation: xf.rotation,
+          boxW: (tx.boxW ?? 200) * xfScaleX(xf),
+          boxH: (tx.boxH ?? 80) * xfScaleY(xf),
+        });
+      }
     }
-    out.push({ duration: b - a, layers });
+    out.push({ duration: b - a, layers, texts });
   }
   return out;
 }

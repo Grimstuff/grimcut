@@ -2,7 +2,8 @@ import type { ClipTransform } from "./canvas";
 
 export type { ClipTransform };
 
-export type ClipKind = "video" | "audio";
+export type ClipKind = "video" | "audio" | "text";
+export type TextAlign = "left" | "center" | "right";
 /** Two-layer system: `base` is the main track, `over` is the single 2nd layer per kind. Overlay wins while it covers. */
 export type ClipLayer = "base" | "over";
 
@@ -19,6 +20,13 @@ export type Clip = {
   sourcePath?: string;
   /** Canvas placement. scale=1 fits the whole frame in the canvas. */
   transform?: ClipTransform;
+  text?: string;
+  fontFamily?: string;
+  fontSize?: number;
+  textAlign?: TextAlign;
+  textColor?: string;
+  boxW?: number;
+  boxH?: number;
 };
 
 export type VideoProject = {

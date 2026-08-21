@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fromMedia, flattenCanvas, flattenKind, mapTimelineToSource, timelineDuration } from "./project";
-import { tryAddOverlayFromMedia, tryDelete, tryLiftRange, tryMove, trySlice, tryToggleLink, tryTrim } from "./edits";
+import { tryAddOverlayFromMedia, tryAddText, tryDelete, tryLiftRange, tryMove, trySlice, tryToggleLink, tryTrim } from "./edits";
 import type { MediaInfo } from "./types";
 
 const info: MediaInfo = {
@@ -18,6 +18,16 @@ describe("timeline model", () => {
     const slices = flattenCanvas(p, { ...info, width: 1920, height: 1080 });
     expect(slices[0].layers).toHaveLength(1);
     expect(slices[0].layers[0].scale).toBe(1);
+  });
+
+  it("text layer sits on overlay if base is occupied", () => {
+    const p = fromMedia(info);
+    const r = tryAddText(p, 1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const tx = r.clips.find((c) => c.kind === "text");
+    expect(tx?.layer).toBe("over");
+    expect(tx?.sourceEnd).toBe(3);
   });
 
   it("opens with linked video+audio", () => {

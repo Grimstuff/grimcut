@@ -103,8 +103,14 @@ export function clipDrawRect(
   canvasW: number,
   canvasH: number,
   xf: ClipTransform,
+  mode: "video" | "text" = "video",
 ) {
-  const { w, h } = containSize(srcW, srcH, canvasW, canvasH, xfScaleX(xf), xfScaleY(xf));
+  const sx = xfScaleX(xf);
+  const sy = xfScaleY(xf);
+  const { w, h } =
+    mode === "text"
+      ? { w: Math.max(8, srcW * sx), h: Math.max(8, srcH * sy) }
+      : containSize(srcW, srcH, canvasW, canvasH, sx, sy);
   const cx = canvasW / 2 + xf.x;
   const cy = canvasH / 2 + xf.y;
   return { w, h, x: cx - w / 2, y: cy - h / 2, cx, cy, rotation: xf.rotation };

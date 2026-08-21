@@ -400,6 +400,55 @@ html.is-live-resize body {
   text-shadow: 0 0 8px rgba(94, 176, 255, 0.9), 0 1px 3px #000;
 }
 
+.text-layer {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  line-height: 1.15;
+  white-space: pre-wrap;
+  overflow: visible;
+  transform-origin: center center;
+}
+
+.text-layer-inner {
+  min-width: 1ch;
+  outline: none;
+  padding: 4px 8px;
+}
+
+.text-layer.is-edit .text-layer-inner {
+  caret-color: #5eb0ff;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.tb-props {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tb-font {
+  height: 28px;
+  max-width: 130px;
+  border: 1px solid var(--gp-border);
+  background: var(--gp-surface);
+  color: var(--gp-text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 6px;
+}
+
+.tb-fsize {
+  width: 52px;
+  height: 28px;
+  border: 1px solid var(--gp-border);
+  background: var(--gp-surface);
+  color: var(--gp-text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 4px;
+}
+
 .canvas-meta {
   flex-shrink: 0;
   height: 18px;
@@ -920,6 +969,16 @@ html.is-live-resize body {
   z-index: 2;
   background: #8b3a2a;
   border-color: #f0a090;
+}
+
+.clip.text {
+  background: #3a2a58;
+  border-color: #c4a0ff;
+}
+
+.clip.text.overlay {
+  background: #4a3080;
+  border-color: #e0c4ff;
 }
 
 .clip.audio.overlay {

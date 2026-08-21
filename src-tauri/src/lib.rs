@@ -70,6 +70,32 @@ pub struct CompSliceDto {
     pub duration: f64,
     #[serde(default)]
     pub layers: Vec<CompLayerDto>,
+    #[serde(default)]
+    pub texts: Vec<CompTextDto>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompTextDto {
+    pub text: String,
+    #[serde(default)]
+    pub font_family: String,
+    #[serde(default)]
+    pub font_size: f64,
+    #[serde(default)]
+    pub align: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default)]
+    pub rotation: f64,
+    #[serde(default)]
+    pub box_w: f64,
+    #[serde(default)]
+    pub box_h: f64,
 }
 
 #[derive(Deserialize)]
@@ -814,6 +840,48 @@ fn contain_wh(src_w: i32, src_h: i32, canvas_w: i32, canvas_h: i32, scale_x: f64
     )
 }
 
+fn font_file(family: &str) -> String {
+    let n = family.to_ascii_lowercase();
+    let file = if n.contains("arial") {
+        "arial.ttf"
+    } else if n.contains("georgia") {
+        "georgia.ttf"
+    } else if n.contains("times") {
+        "times.ttf"
+    } else if n.contains("verdana") {
+        "verdana.ttf"
+    } else if n.contains("comic") {
+        "comic.ttf"
+    } else if n.contains("impact") {
+        "impact.ttf"
+    } else if n.contains("courier") {
+        "cour.ttf"
+    } else if n.contains("trebuchet") {
+        "trebuc.ttf"
+    } else {
+        "segoeui.ttf"
+    };
+    format!("C\\:/Windows/Fonts/{file}")
+}
+
+fn drawtext_filter(src: &str, dst: &str, tx: &CompTextDto, _w: i32, _h: i32) -> String {
+    let escaped = tx
+        .text
+        .replace('\\', "\\\\\\\\")
+        .replace(':', "\\:")
+        .replace('\'', "\u{2019}")
+        .replace('%', "%%");
+    let size = tx.font_size.max(8.0);
+    let color = tx.color.trim_start_matches('#').trim();
+    let color = if color.is_empty() { "ffffff" } else { color };
+    format!(
+        "[{src}]drawtext=fontfile='{font}':text='{escaped}':fontsize={size}:fontcolor={color}:x=(w-text_w)/2+{x:.2}:y=(h-text_h)/2+{y:.2}[{dst}];",
+        font = font_file(&tx.font_family),
+        x = tx.x,
+        y = tx.y,
+    )
+}
+
 fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
     let w = even_dim(plan.width.unwrap_or(1920), 1920);
     let h = even_dim(plan.height.unwrap_or(1080), 1080);
@@ -828,9 +896,7 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
             fc.push_str(&format!(
                 "color=c=black:s={w}x{h}:r={fps}:d={d:.6},format=yuv420p,setsar=1[v{i}];"
             ));
-            vpads.push_str(&format!("[v{i}]"));
-            continue;
-        }
+        } else {
         fc.push_str(&format!(
             "color=c=black:s={w}x{h}:r={fps}:d={d:.6},format=yuv420p,setsar=1[bg{i}];"
         ));
@@ -869,7 +935,17 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
             ));
             prev = out;
         }
-        vpads.push_str(&format!("[v{i}]"));
+        } // else layers
+        let mut vlab = format!("v{i}");
+        for (k, tx) in slice.texts.iter().enumerate() {
+            if tx.text.trim().is_empty() {
+                continue;
+            }
+            let nxt = format!("vtx{i}_{k}");
+            fc.push_str(&drawtext_filter(&vlab, &nxt, tx, w, h));
+            vlab = nxt;
+        }
+        vpads.push_str(&format!("[{vlab}]"));
     }
     fc.push_str(&format!(
         "{}concat=n={}:v=1:a=0[vout];",

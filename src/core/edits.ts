@@ -100,14 +100,14 @@ export function tryTrim(
     const next = { ...c };
     if (edge === "left") {
       let start = Math.max(0, newSourceEdge);
-      if (p.sourceDuration > 0) start = Math.min(start, p.sourceDuration);
+      if (c.kind !== "text" && p.sourceDuration > 0) start = Math.min(start, p.sourceDuration);
       if (start > next.sourceEnd - MIN_CLIP) start = next.sourceEnd - MIN_CLIP;
       const delta = start - next.sourceStart;
       next.sourceStart = start;
       next.timelineStart = Math.max(0, next.timelineStart + delta);
     } else {
       let end = newSourceEdge;
-      if (p.sourceDuration > 0) end = Math.min(end, p.sourceDuration);
+      if (c.kind !== "text" && p.sourceDuration > 0) end = Math.min(end, p.sourceDuration);
       if (end < next.sourceStart + MIN_CLIP) end = next.sourceStart + MIN_CLIP;
       next.sourceEnd = end;
     }
@@ -129,6 +129,12 @@ function rangeOverlaps(c: Clip, start: number, end: number) {
   return c.timelineStart < end && clipEnd(c) > start;
 }
 
+function sameStack(a: Clip, b: Clip) {
+  const vis = (k: ClipKind) => k === "video" || k === "text";
+  if (vis(a.kind) && vis(b.kind)) return true;
+  return a.kind === "audio" && b.kind === "audio";
+}
+
 /** Split clips of this kind+layer around [start, end). Linked partners split with them. */
 function punchLayer(
   clips: Clip[],
@@ -143,7 +149,8 @@ function punchLayer(
   if (b - a < MIN_CLIP) return clips.map(cloneClip);
   const hit = new Set<string>();
   for (const c of clips) {
-    if (keep.has(c.id) || c.kind !== kind || c.layer !== layer) continue;
+    if (keep.has(c.id) || c.layer !== layer) continue;
+    if (kind === "audio" ? c.kind !== "audio" : c.kind === "audio") continue;
     if (b <= c.timelineStart || a >= clipEnd(c)) continue;
     hit.add(c.id);
     if (c.linkGroup) {
@@ -199,7 +206,7 @@ export function resolveOccupancy(p: VideoProject, placedIds: Set<string>): EditR
     const start = me.timelineStart;
     const end = clipEnd(me);
     const hit = clips.some(
-      (c) => !placedIds.has(c.id) && c.kind === me.kind && c.layer === "base" && rangeOverlaps(c, start, end),
+      (c) => !placedIds.has(c.id) && sameStack(c, me) && c.layer === "base" && rangeOverlaps(c, start, end),
     );
     if (!hit) continue;
     me.layer = "over";
@@ -216,7 +223,7 @@ export function resolveOccupancy(p: VideoProject, placedIds: Set<string>): EditR
     if (me.layer !== "over") continue;
     const start = me.timelineStart;
     const end = clipEnd(me);
-    const covering = next.some((c) => c.id !== me.id && c.kind === me.kind && rangeOverlaps(c, start, end));
+    const covering = next.some((c) => c.id !== me.id && sameStack(c, me) && rangeOverlaps(c, start, end));
     if (!covering) me.layer = "base";
   }
   if (next.filter((c) => c.kind === "video").length === 0) {
@@ -411,6 +418,29 @@ export function tryAddOverlayFromMedia(p: VideoProject, info: MediaInfo, at: num
     });
   }
   return resolveOccupancy({ ...p, clips }, ids);
+}
+
+export function tryAddText(p: VideoProject, at: number): EditResult {
+  const id = newId();
+  const clips = p.clips.map(cloneClip);
+  clips.push({
+    id,
+    kind: "text",
+    layer: "base",
+    timelineStart: Math.max(0, at),
+    sourceStart: 0,
+    sourceEnd: 3,
+    linkGroup: null,
+    text: "",
+    fontFamily: "Segoe UI",
+    fontSize: 64,
+    textAlign: "center",
+    textColor: "#ffffff",
+    boxW: 280,
+    boxH: 88,
+    transform: defaultTransform(),
+  });
+  return resolveOccupancy({ ...p, clips }, new Set([id]));
 }
 
 export class UndoStack {

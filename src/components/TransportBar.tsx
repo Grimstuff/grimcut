@@ -295,6 +295,40 @@ function IconPaste() {
     </svg>
   );
 }
+function IconText() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        d="M3.2 3.5h9.6M8 3.5v9M5.5 12.5h5"
+      />
+    </svg>
+  );
+}
+function IconAlignLeft() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" d="M3 4h10M3 8h7M3 12h10" />
+    </svg>
+  );
+}
+function IconAlignCenter() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" d="M3 4h10M5 8h6M3 12h10" />
+    </svg>
+  );
+}
+function IconAlignRight() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" d="M3 4h10M6 8h7M3 12h10" />
+    </svg>
+  );
+}
 function IconCut() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -424,6 +458,8 @@ export function TransportBar() {
   );
   const canDel = !!selected || canCut;
   const muted = volume <= 0.001;
+  const textClip = selected?.kind === "text" ? selected : null;
+  const fonts = ["Segoe UI", "Arial", "Georgia", "Times New Roman", "Verdana", "Trebuchet MS", "Comic Sans MS", "Impact", "Courier New"];
 
   const applyTyped = () => {
     const parsed = parseRes(resText);
@@ -434,6 +470,56 @@ export function TransportBar() {
   return (
     <div className="tl-bar" ref={wrap}>
       <div className="tl-bar-left">
+        {textClip ? (
+          <div className="tb-props">
+            <select
+              className="tb-font"
+              title="Font"
+              value={textClip.fontFamily ?? "Segoe UI"}
+              onChange={(e) => useEditor.getState().setTextProps(textClip.id, { fontFamily: e.target.value })}
+            >
+              {fonts.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+            <input
+              className="tb-fsize"
+              title="Font size"
+              type="number"
+              min={8}
+              max={400}
+              value={textClip.fontSize ?? 64}
+              onChange={(e) => useEditor.getState().setTextProps(textClip.id, { fontSize: Number(e.target.value) || 64 })}
+            />
+            <button
+              type="button"
+              className={`icon-btn${textClip.textAlign === "left" ? " is-on" : ""}`}
+              title="Align left"
+              onClick={() => useEditor.getState().setTextProps(textClip.id, { textAlign: "left" })}
+            >
+              <IconAlignLeft />
+            </button>
+            <button
+              type="button"
+              className={`icon-btn${(textClip.textAlign ?? "center") === "center" ? " is-on" : ""}`}
+              title="Align center"
+              onClick={() => useEditor.getState().setTextProps(textClip.id, { textAlign: "center" })}
+            >
+              <IconAlignCenter />
+            </button>
+            <button
+              type="button"
+              className={`icon-btn${textClip.textAlign === "right" ? " is-on" : ""}`}
+              title="Align right"
+              onClick={() => useEditor.getState().setTextProps(textClip.id, { textAlign: "right" })}
+            >
+              <IconAlignRight />
+            </button>
+          </div>
+        ) : (
+        <>
         <div
           className="tb-vol"
           onPointerEnter={() => setVolHint(true)}
@@ -583,6 +669,8 @@ export function TransportBar() {
             </div>
           ) : null}
         </div>
+        </>
+        )}
       </div>
 
       <div className="tl-bar-center">
@@ -601,6 +689,11 @@ export function TransportBar() {
       </div>
 
       <div className="tl-bar-right">
+        <div className="tb-group">
+          <button type="button" className="icon-btn" title="Add text layer" onClick={() => useEditor.getState().addTextClip()}>
+            <IconText />
+          </button>
+        </div>
         <div className="tb-group">
           {clipboard ? (
             <button
