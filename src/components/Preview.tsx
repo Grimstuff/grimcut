@@ -77,6 +77,7 @@ export function Preview() {
   const playhead = useEditor((s) => s.playhead);
   const selectedId = useEditor((s) => s.selectedId);
   const playing = useEditor((s) => s.playing);
+  const editingTextId = useEditor((s) => s.editingTextId);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -196,7 +197,6 @@ export function Preview() {
   const selected = project.clips.find((c) => c.id === selectedId && (c.kind === "video" || c.kind === "text")) ?? null;
   const selectedLive =
     selected && playhead >= selected.timelineStart && playhead < clipEnd(selected) ? selected : null;
-  const editingTextId = useEditor((s) => s.editingTextId);
 
   const toCanvas = (clientX: number, clientY: number) => {
     const el = viewRef.current;

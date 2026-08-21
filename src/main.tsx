@@ -14,10 +14,22 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { err: string | n
   }
   render() {
     if (this.state.err) {
+      const err = this.state.err;
       return (
-        <pre style={{ padding: 16, color: "#fff", background: "#1e1e1e", whiteSpace: "pre-wrap" }}>
-          {this.state.err}
-        </pre>
+        <div style={{ padding: 16, color: "#fff", background: "#1e1e1e", height: "100%", userSelect: "text" }}>
+          <p style={{ marginTop: 0 }}>Something broke. Copy this and paste it in chat.</p>
+          <pre style={{ whiteSpace: "pre-wrap", userSelect: "text" }}>{err}</pre>
+          <button
+            type="button"
+            style={{ marginRight: 8, padding: "6px 12px" }}
+            onClick={() => void navigator.clipboard.writeText(err)}
+          >
+            Copy error
+          </button>
+          <button type="button" style={{ padding: "6px 12px" }} onClick={() => this.setState({ err: null })}>
+            Try again
+          </button>
+        </div>
       );
     }
     return this.props.children;
