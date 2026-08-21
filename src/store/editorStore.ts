@@ -15,7 +15,7 @@ import {
   snapStart,
   timelineDuration,
 } from "../core/project";
-import { AR_PRESETS, RES_BY_AR, evenPx, type ClipTransform } from "../core/canvas";
+import { AR_PRESETS, RES_BY_AR, evenPx, hugTextClip, type ClipTransform } from "../core/canvas";
 import {
   UndoStack,
   chunkFromRange,
@@ -112,9 +112,12 @@ type EditorState = {
   setPreviewVolume: (v: number) => void;
   liveTransform: (id: string, xf: ClipTransform) => void;
   addTextClip: () => void;
-  setTextProps: (id: string, patch: Partial<Clip>) => void;
+  setTextProps: (id: string, patch: Partial<Clip>, opts?: { hug?: boolean }) => void;
+  hugText: (id: string) => void;
   setEditingText: (id: string | null) => void;
   editingTextId: string | null;
+  colorPickId: string | null;
+  setColorPick: (id: string | null) => void;
   exportVideo: () => Promise<void>;
 };
 
@@ -166,6 +169,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   progress: null,
   previewVolume: 1,
   editingTextId: null,
+  colorPickId: null,
+  setColorPick: (id) => set({ colorPickId: id }),
 
   setPlaying: (v) => set({ playing: v }),
   togglePlay: () => {
@@ -653,7 +658,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   setCanvasPreset: (id) => {
     const list = RES_BY_AR[id];
     const fallback = AR_PRESETS.find((x) => x.id === id);
-    const pick = list?.[2] ?? list?.[0] ?? fallback;
+    const pick = list?.find((r) => Math.min(r.w, r.h) === 1080) ?? list?.[2] ?? list?.[0] ?? fallback;
     if (!pick) return;
     get().setCanvas(pick.w, pick.h);
   },
@@ -673,13 +678,39 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setEditingText: (id) => set({ editingTextId: id, selectedId: id ?? get().selectedId }),
 
-  setTextProps: (id, patch) => {
+  setTextProps: (id, patch, opts) => {
+    const p = get().project;
+    if (!p) return;
+    const hug = opts?.hug !== false;
+    const typed = "text" in patch || "fontFamily" in patch || "fontSize" in patch || "textAlign" in patch;
+    set({
+      project: {
+        ...p,
+        clips: p.clips.map((c) => {
+          if (c.id !== id) return c;
+          let next: Clip = { ...c, ...patch };
+          if ("fontSize" in patch && next.transform) {
+            next = {
+              ...next,
+              transform: { ...next.transform, scale: 1, scaleX: 1, scaleY: 1 },
+            };
+          }
+          if (hug && typed && !("boxW" in patch) && !("boxH" in patch) && next.kind === "text") {
+            next = hugTextClip(next);
+          }
+          return next;
+        }),
+      },
+    });
+  },
+
+  hugText: (id) => {
     const p = get().project;
     if (!p) return;
     set({
       project: {
         ...p,
-        clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+        clips: p.clips.map((c) => (c.id === id && c.kind === "text" ? hugTextClip(c) : c)),
       },
     });
   },
@@ -693,7 +724,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       return;
     }
     const added = r.clips.find((c) => c.kind === "text" && !p.clips.some((o) => o.id === c.id));
-    applyClips(get, set, r.clips, "Text layer");
+    const clips = added ? r.clips.map((c) => (c.id === added.id ? hugTextClip(c) : c)) : r.clips;
+    applyClips(get, set, clips, "Text layer");
     set({
       selectedId: added?.id ?? get().selectedId,
       editingTextId: added?.id ?? null,

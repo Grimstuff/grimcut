@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { AR_PRESETS, RES_BY_AR, arOf } from "../core/canvas";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { FONT_SIZE_STEPS, RES_BY_AR, arOf, stepFontSize, visualFontSize } from "../core/canvas";
+import type { Clip, TextAlign } from "../core/types";
 import { useEditor } from "../store/editorStore";
+import { TextColorPop } from "./TextColorPop";
+import { COMMON_FONTS, listSystemFonts } from "../lib/systemFonts";
 import { applyPreviewVolume, noteUserSeek, syncPreviewToPlayhead, togglePlayback } from "../lib/playbackClock";
 
 function pad(n: number, w: number) {
@@ -308,6 +311,203 @@ function IconText() {
     </svg>
   );
 }
+function FontSizeField({ clip }: { clip: Clip }) {
+  const wrap = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const size = visualFontSize(clip);
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState<string | null>(null);
+  const [menuH, setMenuH] = useState(160);
+  const shown = typed ?? String(size);
+
+  const applyStep = (dir: 1 | -1) => {
+    const live = useEditor.getState().project?.clips.find((c) => c.id === clip.id) ?? clip;
+    const next = stepFontSize(visualFontSize(live), dir);
+    setTyped(null);
+    useEditor.getState().setTextProps(clip.id, { fontSize: next });
+  };
+
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      applyStep(e.deltaY > 0 ? 1 : -1);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [clip.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    const dock = wrap.current?.closest(".timeline-dock") as HTMLElement | null;
+    const measure = () => {
+      const r = wrap.current?.getBoundingClientRect();
+      const dockR = dock?.getBoundingClientRect();
+      if (!r) return;
+      const floor = dockR ? dockR.bottom : window.innerHeight;
+      setMenuH(Math.max(72, Math.min(240, floor - r.bottom - 10)));
+    };
+    measure();
+    const onDoc = (e: MouseEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      applyStep(e.deltaY > 0 ? 1 : -1);
+    };
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    window.addEventListener("resize", measure);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("wheel", onWheel, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open, clip.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = menu.current?.querySelector(".is-on") as HTMLElement | null;
+    el?.scrollIntoView({ block: "nearest" });
+  }, [open, size]);
+
+  const commit = (raw: string) => {
+    const n = Number(raw);
+    setTyped(null);
+    if (Number.isFinite(n) && n >= 6) useEditor.getState().setTextProps(clip.id, { fontSize: Math.min(400, Math.round(n)) });
+  };
+
+  return (
+    <div className={`tb-fsize-wrap${open ? " is-open" : ""}`} ref={wrap} title="Font size — scroll the list">
+      <div className="tb-fsize-face">
+        <input
+          ref={input}
+          className="tb-fsize"
+          value={shown}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => setTyped(e.target.value.replace(/[^\d.]/g, ""))}
+          onBlur={() => commit(typed ?? shown)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              commit((e.target as HTMLInputElement).value);
+              setOpen(false);
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="tb-caret-hit"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="tb-caret" />
+        </button>
+      </div>
+      {open ? (
+        <div className="tb-menu tb-fsize-menu" ref={menu} style={{ maxHeight: menuH }}>
+          {FONT_SIZE_STEPS.map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={n === size ? "is-on" : ""}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setTyped(null);
+                useEditor.getState().setTextProps(clip.id, { fontSize: n });
+                setOpen(false);
+              }}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const lastAlign = new Map<string, TextAlign>();
+
+function AlignToggle({ clip }: { clip: Clip }) {
+  const align = clip.textAlign ?? "center";
+  if (align !== "center") lastAlign.set(clip.id, align);
+  const [hot, setHot] = useState(false);
+  const held = useRef(false);
+  const timer = useRef<number | null>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!hot) return;
+    const onDoc = (e: PointerEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setHot(false);
+    };
+    document.addEventListener("pointerdown", onDoc);
+    return () => document.removeEventListener("pointerdown", onDoc);
+  }, [hot]);
+
+  const pick = (a: TextAlign) => {
+    if (a !== "center") lastAlign.set(clip.id, a);
+    useEditor.getState().setTextProps(clip.id, { textAlign: a });
+    setHot(false);
+  };
+
+  const Icon = align === "left" ? IconAlignLeft : align === "right" ? IconAlignRight : IconAlignCenter;
+
+  return (
+    <div className="tb-align-wrap" ref={wrap}>
+      <button
+        type="button"
+        className={`icon-btn${align === "center" ? " is-on" : ""}`}
+        title="Align — click to cycle, hold for all"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          held.current = false;
+          timer.current = window.setTimeout(() => {
+            held.current = true;
+            setHot(true);
+          }, 280);
+        }}
+        onPointerUp={() => {
+          if (timer.current) {
+            window.clearTimeout(timer.current);
+            timer.current = null;
+          }
+          if (held.current) return;
+          const order: TextAlign[] = ["left", "center", "right"];
+          const i = order.indexOf(align);
+          pick(order[(i + 1) % 3]);
+        }}
+        onPointerLeave={() => {
+          if (timer.current) {
+            window.clearTimeout(timer.current);
+            timer.current = null;
+          }
+        }}
+      >
+        <Icon />
+      </button>
+      {hot ? (
+        <div className="tb-float tb-align-hot">
+          <button type="button" className={`icon-btn${align === "left" ? " is-on" : ""}`} title="Left" onClick={() => pick("left")}>
+            <IconAlignLeft />
+          </button>
+          <button type="button" className={`icon-btn${align === "center" ? " is-on" : ""}`} title="Center" onClick={() => pick("center")}>
+            <IconAlignCenter />
+          </button>
+          <button type="button" className={`icon-btn${align === "right" ? " is-on" : ""}`} title="Right" onClick={() => pick("right")}>
+            <IconAlignRight />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function IconAlignLeft() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -380,6 +580,48 @@ function IconMonitor() {
     </svg>
   );
 }
+
+function IconArWide() {
+  return (
+    <svg width="22" height="16" viewBox="0 0 22 16" aria-hidden="true">
+      <rect x="1.2" y="3.2" width="19.6" height="9.6" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="2.6" y="4.6" width="16.8" height="6.8" rx="0.4" fill="currentColor" opacity="0.18" />
+    </svg>
+  );
+}
+function IconArCrt() {
+  return (
+    <svg width="22" height="16" viewBox="0 0 22 16" aria-hidden="true">
+      <rect x="3.2" y="1.6" width="15.6" height="11.2" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="5" y="3.2" width="12" height="8" rx="0.6" fill="currentColor" opacity="0.18" />
+      <path fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" d="M8.2 14.2h5.6" />
+    </svg>
+  );
+}
+function IconArSquare() {
+  return (
+    <svg width="22" height="16" viewBox="0 0 22 16" aria-hidden="true">
+      <rect x="4.6" y="1.6" width="12.8" height="12.8" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="6.2" y="3.2" width="9.6" height="9.6" rx="0.4" fill="currentColor" opacity="0.18" />
+    </svg>
+  );
+}
+function IconArPhone() {
+  return (
+    <svg width="22" height="16" viewBox="0 0 22 16" aria-hidden="true">
+      <rect x="7.4" y="0.6" width="7.2" height="14.8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="8.6" y="2.2" width="4.8" height="10.2" rx="0.35" fill="currentColor" opacity="0.18" />
+      <path fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" d="M9.8 13.8h2.4" />
+    </svg>
+  );
+}
+
+const AR_ICONS: { id: string; title: string; Icon: () => ReactNode }[] = [
+  { id: "16:9", title: "Widescreen 16:9", Icon: IconArWide },
+  { id: "4:3", title: "CRT 4:3", Icon: IconArCrt },
+  { id: "1:1", title: "Square 1:1", Icon: IconArSquare },
+  { id: "9:16", title: "Phone 9:16", Icon: IconArPhone },
+];
 function IconSpeaker({ muted }: { muted: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -418,10 +660,10 @@ export function TransportBar() {
   const clipboard = useEditor((s) => s.clipboard);
   const volume = useEditor((s) => s.previewVolume);
   const [canvasOpen, setCanvasOpen] = useState(false);
-  const [arOpen, setArOpen] = useState(false);
   const [resOpen, setResOpen] = useState(false);
   const [resText, setResText] = useState("");
   const [volHint, setVolHint] = useState(false);
+  const [sysFonts, setSysFonts] = useState<string[]>([]);
   const wrap = useRef<HTMLDivElement>(null);
   const lastVol = useRef(1);
 
@@ -438,7 +680,6 @@ export function TransportBar() {
     const onDoc = (e: MouseEvent) => {
       if (!wrap.current?.contains(e.target as Node)) {
         setCanvasOpen(false);
-        setArOpen(false);
         setResOpen(false);
       }
     };
@@ -459,7 +700,7 @@ export function TransportBar() {
   const canDel = !!selected || canCut;
   const muted = volume <= 0.001;
   const textClip = selected?.kind === "text" ? selected : null;
-  const fonts = ["Segoe UI", "Arial", "Georgia", "Times New Roman", "Verdana", "Trebuchet MS", "Comic Sans MS", "Impact", "Courier New"];
+  const fonts = COMMON_FONTS;
 
   const applyTyped = () => {
     const parsed = parseRes(resText);
@@ -476,47 +717,35 @@ export function TransportBar() {
               className="tb-font"
               title="Font"
               value={textClip.fontFamily ?? "Segoe UI"}
+              onFocus={() => {
+                if (sysFonts.length === 0) void listSystemFonts().then(setSysFonts);
+              }}
               onChange={(e) => useEditor.getState().setTextProps(textClip.id, { fontFamily: e.target.value })}
             >
-              {fonts.map((f) => (
-                <option key={f} value={f}>
-                  {f}
-                </option>
-              ))}
+              {!fonts.includes(textClip.fontFamily ?? "Segoe UI") &&
+              !sysFonts.includes(textClip.fontFamily ?? "") ? (
+                <option value={textClip.fontFamily}>{textClip.fontFamily}</option>
+              ) : null}
+              <optgroup label="Common">
+                {fonts.map((f) => (
+                  <option key={f} value={f} style={{ fontFamily: f }}>
+                    {f}
+                  </option>
+                ))}
+              </optgroup>
+              {sysFonts.length > 0 ? (
+                <optgroup label="System">
+                  {sysFonts.map((f) => (
+                    <option key={f} value={f} style={{ fontFamily: f }}>
+                      {f}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </select>
-            <input
-              className="tb-fsize"
-              title="Font size"
-              type="number"
-              min={8}
-              max={400}
-              value={textClip.fontSize ?? 64}
-              onChange={(e) => useEditor.getState().setTextProps(textClip.id, { fontSize: Number(e.target.value) || 64 })}
-            />
-            <button
-              type="button"
-              className={`icon-btn${textClip.textAlign === "left" ? " is-on" : ""}`}
-              title="Align left"
-              onClick={() => useEditor.getState().setTextProps(textClip.id, { textAlign: "left" })}
-            >
-              <IconAlignLeft />
-            </button>
-            <button
-              type="button"
-              className={`icon-btn${(textClip.textAlign ?? "center") === "center" ? " is-on" : ""}`}
-              title="Align center"
-              onClick={() => useEditor.getState().setTextProps(textClip.id, { textAlign: "center" })}
-            >
-              <IconAlignCenter />
-            </button>
-            <button
-              type="button"
-              className={`icon-btn${textClip.textAlign === "right" ? " is-on" : ""}`}
-              title="Align right"
-              onClick={() => useEditor.getState().setTextProps(textClip.id, { textAlign: "right" })}
-            >
-              <IconAlignRight />
-            </button>
+            <FontSizeField clip={textClip} />
+            <TextColorPop clip={textClip} />
+            <AlignToggle clip={textClip} />
           </div>
         ) : (
         <>
@@ -572,99 +801,73 @@ export function TransportBar() {
             title="Canvas size and aspect ratio"
             onClick={() => {
               setCanvasOpen((v) => !v);
-              setArOpen(false);
               setResOpen(false);
             }}
           >
             <IconMonitor />
           </button>
           {canvasOpen ? (
-            <div className="tb-pop">
-              <div className="tb-pop-label">Canvas</div>
-              <div className="tb-pop-row">
-                <div className={`tb-combo${arOpen ? " is-open" : ""}`}>
+            <div className="tb-float tb-pop">
+              <div className="tb-ar-row">
+                {AR_ICONS.map(({ id, title, Icon }) => (
                   <button
+                    key={id}
                     type="button"
-                    className="tb-combo-face"
-                    title="Aspect ratio"
+                    className={`tb-ar-btn${ar === id ? " is-on" : ""}`}
+                    title={title}
                     onClick={() => {
-                      setArOpen((v) => !v);
-                      setResOpen(false);
+                      if (id !== ar) useEditor.getState().setCanvasPreset(id);
                     }}
                   >
-                    <span>{ar}</span>
+                    <Icon />
+                  </button>
+                ))}
+              </div>
+              <div className={`tb-combo${resOpen ? " is-open" : ""}`}>
+                <div className="tb-combo-face tb-combo-fill">
+                  <input
+                    className="tb-res-input"
+                    value={resText}
+                    title="Canvas resolution"
+                    onFocus={() => setResOpen(true)}
+                    onChange={(e) => setResText(e.target.value)}
+                    onBlur={applyTyped}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        applyTyped();
+                        setResOpen(false);
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="tb-caret-hit"
+                    title="Common resolutions"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setResOpen((v) => !v)}
+                  >
                     <span className="tb-caret" />
                   </button>
-                  {arOpen ? (
-                    <div className="tb-menu">
-                      {AR_PRESETS.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          className={p.id === ar ? "is-on" : ""}
-                          onClick={() => {
-                            setArOpen(false);
-                            if (p.id !== ar) useEditor.getState().setCanvasPreset(p.id);
-                          }}
-                        >
-                          {p.id}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
                 </div>
-                <div className={`tb-combo${resOpen ? " is-open" : ""}`}>
-                  <div className="tb-combo-face">
-                    <input
-                      className="tb-res-input"
-                      value={resText}
-                      title="Canvas resolution"
-                      onFocus={() => {
-                        setResOpen(true);
-                        setArOpen(false);
-                      }}
-                      onChange={(e) => setResText(e.target.value)}
-                      onBlur={applyTyped}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          applyTyped();
+                {resOpen ? (
+                  <div className="tb-menu tb-menu-wide">
+                    {resList.map((r) => (
+                      <button
+                        key={r.label}
+                        type="button"
+                        className={r.w === project.canvasWidth && r.h === project.canvasHeight ? "is-on" : ""}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          useEditor.getState().setCanvas(r.w, r.h);
                           setResOpen(false);
-                          (e.target as HTMLInputElement).blur();
-                        }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="tb-caret-hit"
-                      title="Common resolutions"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        setResOpen((v) => !v);
-                        setArOpen(false);
-                      }}
-                    >
-                      <span className="tb-caret" />
-                    </button>
+                        }}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
                   </div>
-                  {resOpen ? (
-                    <div className="tb-menu tb-menu-wide">
-                      {resList.map((r) => (
-                        <button
-                          key={r.label}
-                          type="button"
-                          className={r.w === project.canvasWidth && r.h === project.canvasHeight ? "is-on" : ""}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            useEditor.getState().setCanvas(r.w, r.h);
-                            setResOpen(false);
-                          }}
-                        >
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -674,6 +877,10 @@ export function TransportBar() {
       </div>
 
       <div className="tl-bar-center">
+        <button type="button" className="icon-btn icon-btn-lg is-record" title="Record (coming later)" disabled>
+          <IconRecord />
+        </button>
+        <LcdSeek playhead={playhead} />
         <button
           type="button"
           className={`icon-btn icon-btn-lg${playing ? " is-on" : ""}`}
@@ -681,10 +888,6 @@ export function TransportBar() {
           onClick={() => togglePlayback()}
         >
           {playing ? <IconPause /> : <IconPlay />}
-        </button>
-        <LcdSeek playhead={playhead} />
-        <button type="button" className="icon-btn icon-btn-lg is-record" title="Record (coming later)" disabled>
-          <IconRecord />
         </button>
       </div>
 

@@ -282,7 +282,7 @@ export function Timeline() {
       return;
     }
     const t = timeAt(e.clientX);
-    armDrag(e, { kind: "box", track: kind, a: t, b: t, pps, total }, { pps, total });
+    armDrag(e, { kind: "box", track: kind, a: t, b: t, pps, total });
     useEditor.getState().setRange({ start: t, end: t, kind });
     seekVideo(t);
   };
@@ -440,7 +440,7 @@ export function Timeline() {
               return;
             }
             seekVideo(timeAt(e.clientX));
-            armDrag(e, { kind: "seek", pps, total }, { pps, total });
+            armDrag(e, { kind: "seek", pps, total });
           }}
         />
         <div className="playhead-full" style={{ left: playhead * pps + GUTTER }} />

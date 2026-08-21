@@ -25,6 +25,8 @@ export type Clip = {
   fontSize?: number;
   textAlign?: TextAlign;
   textColor?: string;
+  textShadow?: boolean;
+  textStroke?: boolean;
   boxW?: number;
   boxH?: number;
 };

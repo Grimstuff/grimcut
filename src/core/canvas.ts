@@ -17,33 +17,72 @@ export const AR_PRESETS: { id: string; w: number; h: number }[] = [
   { id: "4:3", w: 1440, h: 1080 },
 ];
 
+function ytLabel(w: number, h: number) {
+  const short = Math.min(w, h);
+  const tag =
+    short >= 2160
+      ? "4K"
+      : short >= 1440
+        ? "1440p"
+        : short >= 1080
+          ? "1080p"
+          : short >= 720
+            ? "720p"
+            : short >= 480
+              ? "480p"
+              : short >= 360
+                ? "360p"
+                : short >= 240
+                  ? "240p"
+                  : short >= 144
+                    ? "144p"
+                    : null;
+  return tag ? `${tag}  ·  ${w} × ${h}` : `${w} × ${h}`;
+}
+
+function res(w: number, h: number) {
+  return { w, h, label: ytLabel(w, h) };
+}
+
 export const RES_BY_AR: Record<string, { w: number; h: number; label: string }[]> = {
   "16:9": [
-    { w: 3840, h: 2160, label: "3840 × 2160" },
-    { w: 2560, h: 1440, label: "2560 × 1440" },
-    { w: 1920, h: 1080, label: "1920 × 1080" },
-    { w: 1280, h: 720, label: "1280 × 720" },
-    { w: 854, h: 480, label: "854 × 480" },
+    res(3840, 2160),
+    res(2560, 1440),
+    res(1920, 1080),
+    res(1280, 720),
+    res(854, 480),
+    res(640, 360),
+    res(426, 240),
+    res(256, 144),
   ],
   "9:16": [
-    { w: 2160, h: 3840, label: "2160 × 3840" },
-    { w: 1440, h: 2560, label: "1440 × 2560" },
-    { w: 1080, h: 1920, label: "1080 × 1920" },
-    { w: 720, h: 1280, label: "720 × 1280" },
-    { w: 480, h: 854, label: "480 × 854" },
+    res(2160, 3840),
+    res(1440, 2560),
+    res(1080, 1920),
+    res(720, 1280),
+    res(480, 854),
+    res(360, 640),
+    res(240, 426),
+    res(144, 256),
   ],
   "1:1": [
-    { w: 2160, h: 2160, label: "2160 × 2160" },
-    { w: 1440, h: 1440, label: "1440 × 1440" },
-    { w: 1080, h: 1080, label: "1080 × 1080" },
-    { w: 720, h: 720, label: "720 × 720" },
+    res(2160, 2160),
+    res(1440, 1440),
+    res(1080, 1080),
+    res(720, 720),
+    res(480, 480),
+    res(360, 360),
+    res(240, 240),
+    res(144, 144),
   ],
   "4:3": [
-    { w: 2048, h: 1536, label: "2048 × 1536" },
-    { w: 1600, h: 1200, label: "1600 × 1200" },
-    { w: 1440, h: 1080, label: "1440 × 1080" },
-    { w: 1024, h: 768, label: "1024 × 768" },
-    { w: 640, h: 480, label: "640 × 480" },
+    res(1920, 1440),
+    res(1440, 1080),
+    res(960, 720),
+    res(640, 480),
+    res(480, 360),
+    res(320, 240),
+    res(192, 144),
   ],
 };
 
@@ -167,6 +206,117 @@ export function snapRotation(deg: number, thresh = 5): number {
     if (Math.abs(n - t) <= thresh) return t === 360 || t === -360 ? 0 : t;
   }
   return n;
+}
+
+/** Word / Photoshop-style type sizes. */
+export const FONT_SIZE_STEPS = [
+  6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 60, 72, 84, 96, 120, 144, 192, 216, 240, 288, 300,
+];
+
+export function stepFontSize(current: number, dir: 1 | -1): number {
+  const n = Math.max(6, Math.min(400, Number.isFinite(current) ? current : 64));
+  if (dir > 0) {
+    const next = FONT_SIZE_STEPS.find((s) => s > n + 0.05);
+    return next ?? FONT_SIZE_STEPS[FONT_SIZE_STEPS.length - 1];
+  }
+  let prev = FONT_SIZE_STEPS[0];
+  for (const s of FONT_SIZE_STEPS) {
+    if (s < n - 0.05) prev = s;
+  }
+  return prev;
+}
+
+export function visualFontSize(c: Clip): number {
+  return Math.max(6, Math.round((c.fontSize ?? 64) * xfScaleY(clipXf(c))));
+}
+
+export function contrastInk(hex: string): string {
+  const t = hex.trim().replace(/^#/, "");
+  const s = t.length === 3 ? t[0] + t[0] + t[1] + t[1] + t[2] + t[2] : t;
+  if (!/^[0-9a-f]{6}$/i.test(s)) return "#000000";
+  const r = parseInt(s.slice(0, 2), 16);
+  const g = parseInt(s.slice(2, 4), 16);
+  const b = parseInt(s.slice(4, 6), 16);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140 ? "#000000" : "#ffffff";
+}
+
+export function measureTextBox(c: Pick<Clip, "text" | "fontFamily" | "fontSize" | "textAlign" | "transform">): {
+  w: number;
+  h: number;
+} {
+  if (typeof document === "undefined") return { w: 280, h: 88 };
+  const size = visualFontSize(c as Clip);
+  const host = document.createElement("div");
+  host.style.cssText = [
+    "position:absolute",
+    "left:-9999px",
+    "top:0",
+    "visibility:hidden",
+    "pointer-events:none",
+    "width:max-content",
+    "max-width:none",
+    "white-space:pre",
+    "line-height:1.15",
+    "padding:4px 10px",
+    `font-family:${JSON.stringify(c.fontFamily ?? "Segoe UI")}`,
+    `font-size:${size}px`,
+    `text-align:${c.textAlign ?? "center"}`,
+  ].join(";");
+  host.textContent = (c.text ?? "").length ? (c.text as string) : "Text";
+  document.body.appendChild(host);
+  const w = Math.ceil(Math.max(24, host.offsetWidth + 8));
+  const h = Math.ceil(Math.max(24, host.offsetHeight + 4));
+  host.remove();
+  return { w, h };
+}
+
+export function bakeTextScale(c: Clip): Clip {
+  const xf = clipXf(c);
+  const sx = xfScaleX(xf);
+  const sy = xfScaleY(xf);
+  return {
+    ...c,
+    fontSize: visualFontSize(c),
+    boxW: Math.max(8, (c.boxW || 280) * sx),
+    boxH: Math.max(8, (c.boxH || 88) * sy),
+    transform: { ...xf, scale: 1, scaleX: 1, scaleY: 1 },
+  };
+}
+
+export function hugTextClip(c: Clip): Clip {
+  const xf = clipXf(c);
+  const next: Clip = {
+    ...c,
+    fontSize: visualFontSize(c),
+    transform: { ...xf, scale: 1, scaleX: 1, scaleY: 1 },
+  };
+  const box = measureTextBox(next);
+  return { ...next, boxW: box.w, boxH: box.h };
+}
+
+export function textLayoutFromRect(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  canvasW: number,
+  canvasH: number,
+  rotation: number,
+  fontSize: number,
+): Pick<Clip, "transform" | "boxW" | "boxH" | "fontSize"> {
+  return {
+    transform: {
+      x: left + w / 2 - canvasW / 2,
+      y: top + h / 2 - canvasH / 2,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      rotation,
+    },
+    boxW: Math.max(8, w),
+    boxH: Math.max(8, h),
+    fontSize: Math.max(6, Math.min(400, fontSize)),
+  };
 }
 
 export function rectToTransform(

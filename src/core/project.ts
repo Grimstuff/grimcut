@@ -268,6 +268,8 @@ export type CompText = {
   rotation: number;
   boxW: number;
   boxH: number;
+  shadow: boolean;
+  stroke: boolean;
 };
 
 export type CompSlice = {
@@ -336,6 +338,8 @@ export function flattenCanvas(
           rotation: xf.rotation,
           boxW: (tx.boxW ?? 200) * xfScaleX(xf),
           boxH: (tx.boxH ?? 80) * xfScaleY(xf),
+          shadow: !!tx.textShadow,
+          stroke: !!tx.textStroke,
         });
       }
     }

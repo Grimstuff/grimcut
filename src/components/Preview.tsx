@@ -2,14 +2,18 @@ import { useEffect, useRef, useState, type PointerEvent as RE } from "react";
 import { clipAt, clipSourcePath } from "../core/project";
 import { clipEnd, type Clip } from "../core/types";
 import {
+  bakeTextScale,
   canvasMagnetPoints,
   canvasSnapPoints,
   clipDrawRect,
   clipXf,
+  contrastInk,
   nearestPoint,
   pointInRotatedRect,
   rectToTransform,
   snapRotation,
+  xfScaleX,
+  xfScaleY,
 } from "../core/canvas";
 import { useEditor } from "../store/editorStore";
 import { markVideoSeekDone, setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead } from "../lib/playbackClock";
@@ -28,10 +32,39 @@ type CanvasDrag =
       h: number;
       px: number;
       py: number;
+      armed: boolean;
+      sx: number;
+      sy: number;
       before: ReturnType<typeof snapshotClips>;
     }
-  | { kind: "scale"; id: string; corner: Corner; ax: number; ay: number; rot: number; before: ReturnType<typeof snapshotClips> }
+  | {
+      kind: "scale";
+      id: string;
+      corner: Corner;
+      ax: number;
+      ay: number;
+      rot: number;
+      startW: number;
+      startH: number;
+      scaleX0: number;
+      scaleY0: number;
+      before: ReturnType<typeof snapshotClips>;
+    }
   | { kind: "rotate"; id: string; rot0: number; ang0: number; typed: string; before: ReturnType<typeof snapshotClips> };
+
+let lastClickAt = 0;
+let lastClickX = 0;
+let lastClickY = 0;
+
+function isRapidSecondClick(e: { clientX: number; clientY: number; button: number; detail?: number }) {
+  if (e.button !== 0) return false;
+  const now = performance.now();
+  const second = now - lastClickAt < 450 && Math.hypot(e.clientX - lastClickX, e.clientY - lastClickY) < 16;
+  lastClickAt = now;
+  lastClickX = e.clientX;
+  lastClickY = e.clientY;
+  return second || (e.detail ?? 0) >= 2;
+}
 
 function snapshotClips() {
   return useEditor.getState().snapshot() ?? [];
@@ -60,7 +93,33 @@ function srcSize(clip: Clip) {
   return { w: m?.width || 1920, h: m?.height || 1080 };
 }
 
+function rectOf(clip: Clip, cw: number, ch: number) {
+  const sz = srcSize(clip);
+  return clipDrawRect(sz.w, sz.h, cw, ch, clipXf(clip), clip.kind === "text" ? "text" : "video");
+}
+
 export function Preview() {
+  const previewUrl = useEditor((s) => s.previewUrl);
+  const project = useEditor((s) => s.project);
+  const pickOpen = useEditor((s) => s.pickOpen);
+  if (!previewUrl || !project) {
+    return (
+      <div className="preview-wrap">
+        <div className="drop-hint">
+          <h1>Grimcut</h1>
+          <p>Drop a video here or Open…</p>
+          <p style={{ fontSize: 12, opacity: 0.7 }}>Simple cuts. Save. No encode maze.</p>
+          <button type="button" className="menu-option" style={{ margin: "16px auto", width: "auto" }} onClick={() => void pickOpen()}>
+            Open video…
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return <PreviewCanvas previewUrl={previewUrl} />;
+}
+
+function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
   const viewRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const overRef = useRef<HTMLVideoElement>(null);
@@ -70,14 +129,12 @@ export function Preview() {
   const [hotDot, setHotDot] = useState<{ x: number; y: number } | null>(null);
   const [rotHud, setRotHud] = useState<number | null>(null);
   const [rotTyped, setRotTyped] = useState(false);
-  const previewUrl = useEditor((s) => s.previewUrl);
   const overlayUrl = useEditor((s) => s.overlayUrl);
-  const pickOpen = useEditor((s) => s.pickOpen);
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
   const selectedId = useEditor((s) => s.selectedId);
-  const playing = useEditor((s) => s.playing);
   const editingTextId = useEditor((s) => s.editingTextId);
+  const colorPickId = useEditor((s) => s.colorPickId);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -173,20 +230,7 @@ export function Preview() {
     return () => ro.disconnect();
   }, [project?.canvasWidth, project?.canvasHeight, previewUrl]);
 
-  if (!previewUrl || !project) {
-    return (
-      <div className="preview-wrap">
-        <div className="drop-hint">
-          <h1>Grimcut</h1>
-          <p>Drop a video here or Open…</p>
-          <p style={{ fontSize: 12, opacity: 0.7 }}>Simple cuts. Save. No encode maze.</p>
-          <button type="button" className="menu-option" style={{ margin: "16px auto", width: "auto" }} onClick={() => void pickOpen()}>
-            Open video…
-          </button>
-        </div>
-      </div>
-    );
-  }
+  if (!project) return null;
 
   const cw = project.canvasWidth;
   const ch = project.canvasHeight;
@@ -208,14 +252,21 @@ export function Preview() {
   const hitClip = (cx: number, cy: number): Clip | null => {
     const order = [textOver, textBase, overClip, baseClip].filter(Boolean) as Clip[];
     for (const c of order) {
-      const sz = srcSize(c);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(c), c.kind === "text" ? "text" : "video");
-      if (pointInRotatedRect(cx, cy, rect)) return c;
+      if (pointInRotatedRect(cx, cy, rectOf(c, cw, ch))) return c;
     }
     return null;
   };
 
   const onPointerDown = (e: RE) => {
+    if (colorPickId) {
+      e.preventDefault();
+      e.stopPropagation();
+      const pt = toCanvas(e.clientX, e.clientY);
+      const hex = sampleStage(pt.x, pt.y, cw, ch, videoRef.current, overRef.current, baseClip, overClip);
+      if (hex) useEditor.getState().setTextProps(colorPickId, { textColor: hex }, { hug: false });
+      useEditor.getState().setColorPick(null);
+      return;
+    }
     if (e.button === 1 || e.altKey) {
       drag.current = { kind: "pan", x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -225,9 +276,9 @@ export function Preview() {
     const pt = toCanvas(e.clientX, e.clientY);
     const hit = hitClip(pt.x, pt.y);
     const t = e.target as HTMLElement;
+    const rapid = isRapidSecondClick(e);
     if (t.closest(".bbox-rot") && selectedLive) {
-      const sz = srcSize(selectedLive);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(selectedLive));
+      const rect = rectOf(selectedLive, cw, ch);
       drag.current = {
         kind: "rotate",
         id: selectedLive.id,
@@ -241,8 +292,7 @@ export function Preview() {
       return;
     }
     if (t.closest(".bbox-center") && selectedLive) {
-      const sz = srcSize(selectedLive);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(selectedLive));
+      const rect = rectOf(selectedLive, cw, ch);
       drag.current = {
         kind: "move",
         id: selectedLive.id,
@@ -252,6 +302,9 @@ export function Preview() {
         h: rect.h,
         px: pt.x,
         py: pt.y,
+        armed: true,
+        sx: e.clientX,
+        sy: e.clientY,
         before: snapshotClips(),
       };
       setMarksOn(true);
@@ -261,8 +314,7 @@ export function Preview() {
     const handle = t.closest(".bbox-handle") as HTMLElement | null;
     if (handle && selectedLive) {
       const corner = (handle.dataset.corner ?? "se") as Corner;
-      const sz = srcSize(selectedLive);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(selectedLive));
+      const rect = rectOf(selectedLive, cw, ch);
       const a = cornerAnchor(rect, corner);
       drag.current = {
         kind: "scale",
@@ -271,6 +323,10 @@ export function Preview() {
         ax: a.ax,
         ay: a.ay,
         rot: rect.rotation,
+        startW: rect.w,
+        startH: rect.h,
+        scaleX0: xfScaleX(clipXf(selectedLive)),
+        scaleY0: xfScaleY(clipXf(selectedLive)),
         before: snapshotClips(),
       };
       setMarksOn(true);
@@ -278,9 +334,13 @@ export function Preview() {
       return;
     }
     if (hit) {
+      if (rapid && hit.kind === "text") {
+        useEditor.getState().setEditingText(hit.id);
+        drag.current = null;
+        return;
+      }
       useEditor.getState().select(hit.id);
-      const sz = srcSize(hit);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(hit));
+      const rect = rectOf(hit, cw, ch);
       drag.current = {
         kind: "move",
         id: hit.id,
@@ -290,13 +350,15 @@ export function Preview() {
         h: rect.h,
         px: pt.x,
         py: pt.y,
+        armed: false,
+        sx: e.clientX,
+        sy: e.clientY,
         before: snapshotClips(),
       };
-      setMarksOn(true);
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
     useEditor.getState().select(null);
+    useEditor.getState().setEditingText(null);
   };
 
   const onPointerMove = (e: RE) => {
@@ -314,6 +376,12 @@ export function Preview() {
     const targets = canvasMagnetPoints(cw, ch);
     const thresh = Math.max(8, 12 / view.z);
     if (d.kind === "move") {
+      if (!d.armed) {
+        if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 5) return;
+        d.armed = true;
+        setMarksOn(true);
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      }
       let left = d.left0 + (pt.x - d.px);
       let top = d.top0 + (pt.y - d.py);
       const corners = [
@@ -351,8 +419,8 @@ export function Preview() {
       let w = Math.max(4, Math.abs(mx - d.ax));
       let h = Math.max(4, Math.abs(my - d.ay));
       const free = e.shiftKey;
+      const ar = d.startW / Math.max(1, d.startH);
       if (!free) {
-        const ar = sz.w / sz.h;
         if (w / h > ar) h = w / ar;
         else w = h * ar;
       }
@@ -366,7 +434,6 @@ export function Preview() {
         w = Math.max(4, Math.abs(mx - d.ax));
         h = Math.max(4, Math.abs(my - d.ay));
         if (!free) {
-          const ar = sz.w / sz.h;
           if (w / h > ar) h = w / ar;
           else w = h * ar;
         }
@@ -374,13 +441,22 @@ export function Preview() {
         top = my < d.ay ? d.ay - h : d.ay;
         setHotDot({ x: hit2.x, y: hit2.y });
       }
-      useEditor.getState().liveTransform(
-        d.id,
-        rectToTransform(left, top, w, h, cw, ch, sz.w, sz.h, d.rot),
-      );
+      if (clip.kind === "text") {
+        const sx = d.scaleX0 * (w / Math.max(1, d.startW));
+        const sy = d.scaleY0 * (h / Math.max(1, d.startH));
+        useEditor.getState().liveTransform(d.id, {
+          x: left + w / 2 - cw / 2,
+          y: top + h / 2 - ch / 2,
+          scale: (sx + sy) / 2,
+          scaleX: sx,
+          scaleY: sy,
+          rotation: d.rot,
+        });
+      } else {
+        useEditor.getState().liveTransform(d.id, rectToTransform(left, top, w, h, cw, ch, sz.w, sz.h, d.rot));
+      }
     } else if (d.kind === "rotate") {
-      const sz = srcSize(clip);
-      const rect = clipDrawRect(sz.w, sz.h, cw, ch, xf, clip.kind === "text" ? "text" : "video");
+      const rect = rectOf(clip, cw, ch);
       const ang = Math.atan2(pt.y - rect.cy, pt.x - rect.cx);
       const raw = d.rot0 + ((ang - d.ang0) * 180) / Math.PI;
       const typed = Number.parseFloat(d.typed);
@@ -410,13 +486,25 @@ export function Preview() {
     setHotDot(null);
     setRotHud(null);
     setRotTyped(false);
-    if (d && d.kind !== "pan") useEditor.getState().commit(d.before, "Transform");
+    if (!d || d.kind === "pan") return;
+    if (d.kind === "move" && !d.armed) return;
+    if (d.kind === "scale") {
+      const clip = useEditor.getState().project?.clips.find((c) => c.id === d.id);
+      if (clip?.kind === "text") {
+        const baked = bakeTextScale(clip);
+        useEditor.getState().setTextProps(
+          clip.id,
+          { fontSize: baked.fontSize, boxW: baked.boxW, boxH: baked.boxH, transform: baked.transform },
+          { hug: false },
+        );
+      }
+    }
+    useEditor.getState().commit(d.before, d.kind === "scale" ? "Transform" : "Transform");
   };
 
   const placeVideo = (clip: Clip | null) => {
     if (!clip) return { display: "none" as const };
-    const sz = srcSize(clip);
-    const rect = clipDrawRect(sz.w, sz.h, cw, ch, clipXf(clip), clip.kind === "text" ? "text" : "video");
+    const rect = rectOf(clip, cw, ch);
     return {
       display: "block" as const,
       left: rect.x,
@@ -427,22 +515,13 @@ export function Preview() {
     };
   };
 
-  const bbox = selectedLive
-    ? clipDrawRect(
-        srcSize(selectedLive).w,
-        srcSize(selectedLive).h,
-        cw,
-        ch,
-        clipXf(selectedLive),
-        selectedLive.kind === "text" ? "text" : "video",
-      )
-    : null;
+  const bbox = selectedLive ? rectOf(selectedLive, cw, ch) : null;
 
   return (
     <div className="preview-wrap is-canvas">
       <div
         ref={viewRef}
-        className="canvas-view"
+        className={`canvas-view${colorPickId ? " is-pick" : ""}`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -501,7 +580,7 @@ export function Preview() {
                 );
               })}
             </div>
-            {bbox ? (
+            {bbox && editingTextId !== selectedLive?.id ? (
               <div
                 className="bbox"
                 style={{
@@ -528,11 +607,6 @@ export function Preview() {
             ) : null}
         </div>
       </div>
-      <div className="canvas-meta">
-        {cw}×{ch}
-        {playing ? " · playing" : ""}
-        {selectedLive ? ` · ${selectedLive.layer === "over" ? "layer 2" : "layer 1"}` : ""}
-      </div>
     </div>
   );
 }
@@ -552,7 +626,12 @@ function TextBox({
 }) {
   const inner = useRef<HTMLDivElement>(null);
   const xf = clipXf(clip);
-  const rect = clipDrawRect(clip.boxW || 280, clip.boxH || 88, cw, ch, xf, "text");
+  const boxW = clip.boxW || 280;
+  const boxH = clip.boxH || 88;
+  const sx = xfScaleX(xf);
+  const sy = xfScaleY(xf);
+  const cx = cw / 2 + xf.x;
+  const cy = ch / 2 + xf.y;
 
   useEffect(() => {
     if (!editing || !inner.current) return;
@@ -565,27 +644,24 @@ function TextBox({
     sel?.addRange(range);
   }, [editing]);
 
-  const measure = () => {
-    const el = inner.current;
-    if (!el) return;
-    const w = Math.ceil(Math.max(48, el.scrollWidth + 8));
-    const h = Math.ceil(Math.max(36, el.scrollHeight + 6));
-    if (w !== clip.boxW || h !== clip.boxH) useEditor.getState().setTextProps(clip.id, { boxW: w, boxH: h });
-  };
-
   return (
     <div
       className={`text-layer${selected ? " is-sel" : ""}${editing ? " is-edit" : ""}`}
       style={{
-        left: rect.x,
-        top: rect.y,
-        minWidth: rect.w,
-        minHeight: rect.h,
-        transform: `rotate(${rect.rotation}deg)`,
+        left: cx - boxW / 2,
+        top: cy - boxH / 2,
+        width: editing ? "max-content" : boxW,
+        height: editing ? "auto" : boxH,
+        transform: `rotate(${xf.rotation}deg) scale(${sx}, ${sy})`,
         fontFamily: clip.fontFamily ?? "Segoe UI",
         fontSize: clip.fontSize ?? 64,
         color: clip.textColor ?? "#fff",
         textAlign: clip.textAlign ?? "center",
+        WebkitTextStroke: clip.textStroke ? `${Math.max(1, (clip.fontSize ?? 64) * 0.055)}px ${contrastInk(clip.textColor ?? "#fff")}` : undefined,
+        paintOrder: clip.textStroke ? "stroke fill" : undefined,
+        textShadow: clip.textShadow
+          ? `${Math.max(1, (clip.fontSize ?? 64) * 0.05)}px ${Math.max(1, (clip.fontSize ?? 64) * 0.07)}px ${Math.max(2, (clip.fontSize ?? 64) * 0.1)}px #000`
+          : undefined,
       }}
       onPointerDown={(e) => {
         if (editing) e.stopPropagation();
@@ -603,10 +679,9 @@ function TextBox({
         suppressContentEditableWarning
         onInput={(e) => {
           useEditor.getState().setTextProps(clip.id, { text: e.currentTarget.innerText });
-          requestAnimationFrame(measure);
         }}
         onBlur={() => {
-          measure();
+          useEditor.getState().setTextProps(clip.id, { text: inner.current?.innerText ?? clip.text ?? "" });
           useEditor.getState().setEditingText(null);
         }}
       >
@@ -614,6 +689,51 @@ function TextBox({
       </div>
     </div>
   );
+}
+
+function sampleStage(
+  x: number,
+  y: number,
+  cw: number,
+  ch: number,
+  baseEl: HTMLVideoElement | null,
+  overEl: HTMLVideoElement | null,
+  baseClip: Clip | null,
+  overClip: Clip | null,
+): string | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(cw));
+  canvas.height = Math.max(1, Math.round(ch));
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const draw = (el: HTMLVideoElement | null, clip: Clip | null) => {
+    if (!el || !clip || el.readyState < 2) return;
+    const r = rectOf(clip, cw, ch);
+    ctx.save();
+    ctx.translate(r.cx, r.cy);
+    ctx.rotate((r.rotation * Math.PI) / 180);
+    try {
+      ctx.drawImage(el, -r.w / 2, -r.h / 2, r.w, r.h);
+    } catch {
+      /* tainted */
+    }
+    ctx.restore();
+  };
+  draw(baseEl, baseClip);
+  draw(overEl, overClip);
+  const px = Math.max(0, Math.min(canvas.width - 1, Math.floor(x)));
+  const py = Math.max(0, Math.min(canvas.height - 1, Math.floor(y)));
+  try {
+    const d = ctx.getImageData(px, py, 1, 1).data;
+    return (
+      "#" +
+      [d[0], d[1], d[2]].map((n) => n.toString(16).padStart(2, "0")).join("")
+    );
+  } catch {
+    return null;
+  }
 }
 
 function urlOf(clip: Clip) {

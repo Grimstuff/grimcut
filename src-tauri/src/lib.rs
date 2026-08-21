@@ -96,6 +96,10 @@ pub struct CompTextDto {
     pub box_w: f64,
     #[serde(default)]
     pub box_h: f64,
+    #[serde(default)]
+    pub shadow: bool,
+    #[serde(default)]
+    pub stroke: bool,
 }
 
 #[derive(Deserialize)]
@@ -874,12 +878,38 @@ fn drawtext_filter(src: &str, dst: &str, tx: &CompTextDto, _w: i32, _h: i32) -> 
     let size = tx.font_size.max(8.0);
     let color = tx.color.trim_start_matches('#').trim();
     let color = if color.is_empty() { "ffffff" } else { color };
+    let ink = contrast_ink(color);
+    let mut extra = String::new();
+    if tx.stroke {
+        let bw = (size * 0.07).max(1.0);
+        extra.push_str(&format!(":borderw={bw:.1}:bordercolor={ink}"));
+    }
+    if tx.shadow {
+        let sx = (size * 0.05).max(1.0);
+        let sy = (size * 0.07).max(1.0);
+        extra.push_str(&format!(":shadowx={sx:.1}:shadowy={sy:.1}:shadowcolor=000000@0.75"));
+    }
     format!(
-        "[{src}]drawtext=fontfile='{font}':text='{escaped}':fontsize={size}:fontcolor={color}:x=(w-text_w)/2+{x:.2}:y=(h-text_h)/2+{y:.2}[{dst}];",
+        "[{src}]drawtext=fontfile='{font}':text='{escaped}':fontsize={size}:fontcolor={color}:x=(w-text_w)/2+{x:.2}:y=(h-text_h)/2+{y:.2}{extra}[{dst}];",
         font = font_file(&tx.font_family),
         x = tx.x,
         y = tx.y,
     )
+}
+
+fn contrast_ink(hex: &str) -> &'static str {
+    let h = hex.trim_start_matches('#');
+    if h.len() < 6 {
+        return "000000";
+    }
+    let r = u8::from_str_radix(&h[0..2], 16).unwrap_or(255) as f64;
+    let g = u8::from_str_radix(&h[2..4], 16).unwrap_or(255) as f64;
+    let b = u8::from_str_radix(&h[4..6], 16).unwrap_or(255) as f64;
+    if 0.2126 * r + 0.7152 * g + 0.0722 * b > 140.0 {
+        "000000"
+    } else {
+        "ffffff"
+    }
 }
 
 fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
@@ -1163,6 +1193,54 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     Err(last_err)
 }
 
+#[tauri::command]
+fn log_frontend_error(app: AppHandle, message: String) -> Result<String, String> {
+    use std::io::Write;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let stamp = format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let body = format!("\n===== {ts} ({stamp}) =====\n{message}\n");
+
+    let mut written: Option<PathBuf> = None;
+    let mut last_err = String::from("could not write crash log");
+
+    let mut targets: Vec<PathBuf> = Vec::new();
+    if let Ok(dir) = app.path().app_log_dir() {
+        let _ = fs::create_dir_all(&dir);
+        targets.push(dir.join("crash.log"));
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("logs")
+        .join("grimcut-crash.log");
+    if let Some(parent) = dev.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    targets.push(dev);
+
+    for path in targets {
+        match fs::OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(mut f) => {
+                if f.write_all(body.as_bytes()).is_ok() {
+                    written = Some(path);
+                }
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    written
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or(last_err)
+}
+
 fn uuid_like() -> String {
     format!(
         "{:x}",
@@ -1191,7 +1269,8 @@ pub fn run() {
             suggest_save,
             make_proxy,
             export_video,
-            set_aspect_lock
+            set_aspect_lock,
+            log_frontend_error
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
