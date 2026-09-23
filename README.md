@@ -9,7 +9,7 @@ Desktop app built with **Tauri 2 + React**, same family as [Grimpad](https://git
 - Node 20+
 - Rust (stable)
 - Windows 10/11 + WebView2
-- FFmpeg n8.1 shared (see setup)
+- FFmpeg (dev: `.\scripts\fetch-ffmpeg.ps1`; testers: PATH or the in-app/installer prompt)
 
 ## Setup
 
@@ -47,6 +47,21 @@ Two horizontal bars: **video** and **audio** (waveform). Linked A/V until you cl
 | Ctrl+C / V | Copy range / paste |
 | Ctrl+Z / Y | Undo / redo |
 | Ctrl+S | Save edited video |
+
+Parked features and later work live in [BACKLOG.md](./BACKLOG.md).
+
+## Agent / CLI
+
+Edits are named commands (open, delete a time range, collapse blanks, export). The GUI is optional.
+
+```powershell
+npm run grimcut -- open D:\clip.mp4
+npm run grimcut -- delete-range 0 60
+npm run grimcut -- collapse-blank
+npm run grimcut -- export D:\clip-cut.mp4
+```
+
+MCP stdio: `npm run mcp` (see BACKLOG). If Grimcut is already open, the CLI/MCP drive that instance.
 
 ## License
 

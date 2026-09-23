@@ -120,9 +120,26 @@ async function eyeDrop(): Promise<string | null> {
   }
 }
 
-export function TextColorPop({ clip }: { clip: Clip }) {
-  const clipId = clip.id;
-  const color = clip.textColor ?? "#ffffff";
+export function ColorPop({
+  color,
+  pickId,
+  shadow,
+  stroke,
+  swatches,
+  onChange,
+  onToggleShadow,
+  onToggleStroke,
+}: {
+  color: string;
+  pickId: string;
+  shadow?: boolean;
+  stroke?: boolean;
+  swatches?: string[];
+  onChange: (hex: string) => void;
+  onToggleShadow?: () => void;
+  onToggleStroke?: () => void;
+}) {
+  const clipId = pickId;
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const hex0 = parseHex(color) ?? "#ffffff";
@@ -169,7 +186,7 @@ export function TextColorPop({ clip }: { clip: Clip }) {
       setHsv(rgbToHsv(rgb.r, rgb.g, rgb.b));
     }
     if (!opts?.fromHex) setHexText(hex.replace("#", "").toUpperCase());
-    useEditor.getState().setTextProps(clipId, { textColor: hex }, { hug: false });
+    onChange(hex);
     if (opts?.remember) remember(hex);
   };
 
@@ -201,24 +218,14 @@ export function TextColorPop({ clip }: { clip: Clip }) {
           <SvPad hsv={hsv} onChange={(next) => apply(next)} onCommit={(next) => apply(next, { remember: true })} />
           <HueBar h={hsv.h} onChange={(h) => apply({ ...hsv, h })} onCommit={(h) => apply({ ...hsv, h }, { remember: true })} />
           <div className="tb-swatches">
-            {PRESET_SWATCHES.map((c) => (
+            {(swatches ?? [...PRESET_SWATCHES, ...slots]).map((c) => (
               <button
                 key={c}
                 type="button"
-                className={`tb-swatch is-preset${hex0 === c ? " is-on" : ""}`}
+                className={`tb-swatch${PRESET_SWATCHES.includes(c) ? " is-preset" : ""}${hex0 === c ? " is-on" : ""}`}
                 style={{ background: c }}
                 title={c}
-                onClick={() => apply(c)}
-              />
-            ))}
-            {slots.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className={`tb-swatch${hex0 === c ? " is-on" : ""}`}
-                style={{ background: c }}
-                title={c}
-                onClick={() => apply(c, { remember: true })}
+                onClick={() => apply(c, { remember: !swatches })}
               />
             ))}
           </div>
@@ -246,28 +253,52 @@ export function TextColorPop({ clip }: { clip: Clip }) {
                 <IconDropper />
               </button>
             </div>
+            {onToggleShadow || onToggleStroke ? (
             <div className="tb-fx">
+              {onToggleShadow ? (
               <button
                 type="button"
-                className={`tb-fx-btn${clip.textShadow ? " is-on" : ""}`}
+                className={`tb-fx-btn${shadow ? " is-on" : ""}`}
                 title="Drop shadow"
-                onClick={() => useEditor.getState().setTextProps(clipId, { textShadow: !clip.textShadow }, { hug: false })}
+                onClick={onToggleShadow}
               >
                 <IconShadow fill={hex0} />
               </button>
+              ) : null}
+              {onToggleStroke ? (
               <button
                 type="button"
-                className={`tb-fx-btn${clip.textStroke ? " is-on" : ""}`}
+                className={`tb-fx-btn${stroke ? " is-on" : ""}`}
                 title="Outline stroke"
-                onClick={() => useEditor.getState().setTextProps(clipId, { textStroke: !clip.textStroke }, { hug: false })}
+                onClick={onToggleStroke}
               >
                 <IconStroke ink={ink} />
               </button>
+              ) : null}
             </div>
+            ) : null}
           </div>
         </div>
       ) : null}
     </div>
+  );
+}
+
+export function TextColorPop({ clip }: { clip: Clip }) {
+  return (
+    <ColorPop
+      color={clip.textColor ?? "#ffffff"}
+      pickId={clip.id}
+      shadow={!!clip.textShadow}
+      stroke={!!clip.textStroke}
+      onChange={(hex) => useEditor.getState().setTextProps(clip.id, { textColor: hex }, { hug: false })}
+      onToggleShadow={() =>
+        useEditor.getState().setTextProps(clip.id, { textShadow: !clip.textShadow }, { hug: false })
+      }
+      onToggleStroke={() =>
+        useEditor.getState().setTextProps(clip.id, { textStroke: !clip.textStroke }, { hug: false })
+      }
+    />
   );
 }
 

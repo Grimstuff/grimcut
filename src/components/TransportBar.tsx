@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FONT_SIZE_STEPS, RES_BY_AR, arOf, stepFontSize, visualFontSize } from "../core/canvas";
 import type { Clip, TextAlign } from "../core/types";
+import { SUB_PICK_ID, SUBTITLE_FONTS, SUBTITLE_SWATCHES, textSubtitleTracks } from "../core/types";
 import { useEditor } from "../store/editorStore";
-import { TextColorPop } from "./TextColorPop";
+import { ColorPop, TextColorPop } from "./TextColorPop";
 import { COMMON_FONTS, listSystemFonts } from "../lib/systemFonts";
 import { applyPreviewVolume, noteUserSeek, syncPreviewToPlayhead, togglePlayback } from "../lib/playbackClock";
 
@@ -298,6 +299,24 @@ function IconPaste() {
     </svg>
   );
 }
+function IconFx() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <text
+        x="8"
+        y="12.2"
+        textAnchor="middle"
+        fill="currentColor"
+        fontSize="10"
+        fontWeight="700"
+        fontFamily="Segoe UI, system-ui, sans-serif"
+        letterSpacing="-0.6"
+      >
+        fx
+      </text>
+    </svg>
+  );
+}
 function IconText() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -311,21 +330,71 @@ function IconText() {
     </svg>
   );
 }
-function FontSizeField({ clip }: { clip: Clip }) {
+function FontFamilySelect({
+  value,
+  onChange,
+  fonts,
+  system,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  fonts?: string[];
+  system?: boolean;
+}) {
+  const list = fonts ?? COMMON_FONTS;
+  const [sysFonts, setSysFonts] = useState<string[]>([]);
+  return (
+    <select
+      className="tb-font"
+      title="Font"
+      value={value}
+      onFocus={() => {
+        if (system && sysFonts.length === 0) void listSystemFonts().then(setSysFonts);
+      }}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {!list.includes(value) && !sysFonts.includes(value) ? <option value={value}>{value}</option> : null}
+      {system ? (
+        <optgroup label="Common">
+          {list.map((f) => (
+            <option key={f} value={f} style={{ fontFamily: f }}>
+              {f}
+            </option>
+          ))}
+        </optgroup>
+      ) : (
+        list.map((f) => (
+          <option key={f} value={f} style={{ fontFamily: f }}>
+            {f}
+          </option>
+        ))
+      )}
+      {system && sysFonts.length > 0 ? (
+        <optgroup label="System">
+          {sysFonts.map((f) => (
+            <option key={f} value={f} style={{ fontFamily: f }}>
+              {f}
+            </option>
+          ))}
+        </optgroup>
+      ) : null}
+    </select>
+  );
+}
+
+function FontSizeField({ size, onChange }: { size: number; onChange: (n: number) => void }) {
   const wrap = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const size = visualFontSize(clip);
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState<string | null>(null);
   const [menuH, setMenuH] = useState(160);
   const shown = typed ?? String(size);
 
   const applyStep = (dir: 1 | -1) => {
-    const live = useEditor.getState().project?.clips.find((c) => c.id === clip.id) ?? clip;
-    const next = stepFontSize(visualFontSize(live), dir);
+    const next = stepFontSize(size, dir);
     setTyped(null);
-    useEditor.getState().setTextProps(clip.id, { fontSize: next });
+    onChange(next);
   };
 
   useEffect(() => {
@@ -338,7 +407,7 @@ function FontSizeField({ clip }: { clip: Clip }) {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [clip.id]);
+  }, [size, onChange]);
 
   useEffect(() => {
     if (!open) return;
@@ -367,7 +436,7 @@ function FontSizeField({ clip }: { clip: Clip }) {
       window.removeEventListener("wheel", onWheel, true);
       window.removeEventListener("resize", measure);
     };
-  }, [open, clip.id]);
+  }, [open, size, onChange]);
 
   useEffect(() => {
     if (!open) return;
@@ -378,7 +447,7 @@ function FontSizeField({ clip }: { clip: Clip }) {
   const commit = (raw: string) => {
     const n = Number(raw);
     setTyped(null);
-    if (Number.isFinite(n) && n >= 6) useEditor.getState().setTextProps(clip.id, { fontSize: Math.min(400, Math.round(n)) });
+    if (Number.isFinite(n) && n >= 6) onChange(Math.min(400, Math.round(n)));
   };
 
   return (
@@ -418,7 +487,7 @@ function FontSizeField({ clip }: { clip: Clip }) {
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 setTyped(null);
-                useEditor.getState().setTextProps(clip.id, { fontSize: n });
+                onChange(n);
                 setOpen(false);
               }}
             >
@@ -429,6 +498,10 @@ function FontSizeField({ clip }: { clip: Clip }) {
       ) : null}
     </div>
   );
+}
+
+function subTrackLabel(t: { language?: string | null; title?: string | null; codec: string }, i: number) {
+  return t.language || t.title || t.codec || `Track ${i + 1}`;
 }
 
 const lastAlign = new Map<string, TextAlign>();
@@ -655,16 +728,35 @@ export function TransportBar() {
   const playhead = useEditor((s) => s.playhead);
   const playing = useEditor((s) => s.playing);
   const selectedId = useEditor((s) => s.selectedId);
+  const selectedEffectId = useEditor((s) => s.selectedEffectId);
   const range = useEditor((s) => s.range);
   const busy = useEditor((s) => s.busy);
   const clipboard = useEditor((s) => s.clipboard);
   const volume = useEditor((s) => s.previewVolume);
+  const media = useEditor((s) => s.media);
+  const burnSubs = useEditor((s) => s.burnSubs);
+  const burnSubIndex = useEditor((s) => s.burnSubIndex);
+  const subStyle = useEditor((s) => s.subStyle);
+  const subTracks = textSubtitleTracks(media);
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [resOpen, setResOpen] = useState(false);
   const [resText, setResText] = useState("");
   const [volHint, setVolHint] = useState(false);
-  const [sysFonts, setSysFonts] = useState<string[]>([]);
+  const [fxOpen, setFxOpen] = useState(false);
+  const [subOpen, setSubOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manEncoder, setManEncoder] = useState("h264");
+  const exportCodecs = useEditor((s) => s.exportCodecs);
+  const exportCodecsReady = useEditor((s) => s.exportCodecsReady);
+  const [manCrf, setManCrf] = useState(20);
+  const [manPreset, setManPreset] = useState("medium");
+  const [manAudio, setManAudio] = useState("192k");
   const wrap = useRef<HTMLDivElement>(null);
+  const canvasPop = useRef<HTMLDivElement>(null);
+  const fxPop = useRef<HTMLDivElement>(null);
+  const subPop = useRef<HTMLDivElement>(null);
+  const exportPop = useRef<HTMLDivElement>(null);
   const lastVol = useRef(1);
 
   useEffect(() => {
@@ -678,14 +770,26 @@ export function TransportBar() {
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) {
+      const t = e.target as Node;
+      if (!canvasPop.current?.contains(t)) {
         setCanvasOpen(false);
         setResOpen(false);
+      }
+      if (!fxPop.current?.contains(t)) setFxOpen(false);
+      if (!subPop.current?.contains(t)) setSubOpen(false);
+      if (!exportPop.current?.contains(t)) {
+        setExportOpen(false);
+        setManualOpen(false);
       }
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
+
+  useEffect(() => {
+    if (!exportCodecsReady || !exportCodecs.length) return;
+    setManEncoder((cur) => (exportCodecs.some((c) => c.id === cur) ? cur : exportCodecs[0].id));
+  }, [exportCodecsReady, exportCodecs]);
 
   if (!project) return null;
 
@@ -697,10 +801,13 @@ export function TransportBar() {
   const onClip = project.clips.some(
     (c) => playhead > c.timelineStart && playhead < c.timelineStart + (c.sourceEnd - c.sourceStart),
   );
-  const canDel = !!selected || canCut;
+  const canDel = !!selected || canCut || !!selectedEffectId;
   const muted = volume <= 0.001;
   const textClip = selected?.kind === "text" ? selected : null;
-  const fonts = COMMON_FONTS;
+  const blurFx =
+    selected && selectedEffectId
+      ? (selected.effects?.find((e) => e.id === selectedEffectId && e.kind === "blur") ?? null)
+      : null;
 
   const applyTyped = () => {
     const parsed = parseRes(resText);
@@ -711,39 +818,34 @@ export function TransportBar() {
   return (
     <div className="tl-bar" ref={wrap}>
       <div className="tl-bar-left">
-        {textClip ? (
+        {blurFx ? (
           <div className="tb-props">
-            <select
-              className="tb-font"
-              title="Font"
+            <span className="tb-prop-label">Blur</span>
+            <span className="tb-blur-track">
+              <input
+                type="range"
+                min={0}
+                max={24}
+                step={0.5}
+                value={blurFx.amount}
+                title="Blur amount"
+                aria-label="Blur amount"
+                onChange={(e) => useEditor.getState().setEffectAmount(blurFx.id, Number(e.target.value))}
+              />
+            </span>
+            <span className="tb-prop-val">{blurFx.amount.toFixed(1)}</span>
+          </div>
+        ) : textClip ? (
+          <div className="tb-props">
+            <FontFamilySelect
               value={textClip.fontFamily ?? "Segoe UI"}
-              onFocus={() => {
-                if (sysFonts.length === 0) void listSystemFonts().then(setSysFonts);
-              }}
-              onChange={(e) => useEditor.getState().setTextProps(textClip.id, { fontFamily: e.target.value })}
-            >
-              {!fonts.includes(textClip.fontFamily ?? "Segoe UI") &&
-              !sysFonts.includes(textClip.fontFamily ?? "") ? (
-                <option value={textClip.fontFamily}>{textClip.fontFamily}</option>
-              ) : null}
-              <optgroup label="Common">
-                {fonts.map((f) => (
-                  <option key={f} value={f} style={{ fontFamily: f }}>
-                    {f}
-                  </option>
-                ))}
-              </optgroup>
-              {sysFonts.length > 0 ? (
-                <optgroup label="System">
-                  {sysFonts.map((f) => (
-                    <option key={f} value={f} style={{ fontFamily: f }}>
-                      {f}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
-            </select>
-            <FontSizeField clip={textClip} />
+              system
+              onChange={(v) => useEditor.getState().setTextProps(textClip.id, { fontFamily: v })}
+            />
+            <FontSizeField
+              size={visualFontSize(textClip)}
+              onChange={(n) => useEditor.getState().setTextProps(textClip.id, { fontSize: n })}
+            />
             <TextColorPop clip={textClip} />
             <AlignToggle clip={textClip} />
           </div>
@@ -794,7 +896,7 @@ export function TransportBar() {
             ) : null}
           </span>
         </div>
-        <div className="tb-canvas-wrap">
+        <div className="tb-canvas-wrap" ref={canvasPop}>
           <button
             type="button"
             className={`icon-btn${canvasOpen ? " is-on" : ""}`}
@@ -802,6 +904,7 @@ export function TransportBar() {
             onClick={() => {
               setCanvasOpen((v) => !v);
               setResOpen(false);
+              setSubOpen(false);
             }}
           >
             <IconMonitor />
@@ -872,6 +975,104 @@ export function TransportBar() {
             </div>
           ) : null}
         </div>
+        {subTracks.length > 0 ? (
+        <div className="tb-subs" ref={subPop}>
+          <button
+            type="button"
+            className={`icon-btn tb-cc${subOpen || burnSubs ? " is-on" : ""}`}
+            title="Subtitles (burn into export)"
+            disabled={busy}
+            onClick={() => {
+              setSubOpen((v) => !v);
+              setCanvasOpen(false);
+              setResOpen(false);
+              setFxOpen(false);
+            }}
+          >
+            CC
+          </button>
+          {subOpen ? (
+            <div className="tb-float tb-sub-menu">
+              <div className="tb-sub-tracks">
+                <button
+                  type="button"
+                  className={!burnSubs || !subTracks.length ? "is-on" : ""}
+                  onClick={() => useEditor.getState().setBurnSubs(false)}
+                >
+                  None
+                </button>
+                {subTracks.map((t, i) => (
+                  <button
+                    key={`${t.index}-${i}`}
+                    type="button"
+                    className={burnSubs && t.index === burnSubIndex ? "is-on" : ""}
+                    onClick={() => useEditor.getState().setBurnSubIndex(t.index)}
+                  >
+                    {subTrackLabel(t, i)}
+                  </button>
+                ))}
+              </div>
+              <div className="tb-sub-style">
+                <div className="tb-sub-row">
+                  <span>Font</span>
+                  <FontFamilySelect
+                    value={subStyle.fontFamily}
+                    fonts={SUBTITLE_FONTS}
+                    onChange={(v) => useEditor.getState().setSubStyle({ fontFamily: v })}
+                  />
+                </div>
+                <div className="tb-sub-row">
+                  <span>Size</span>
+                  <div className="tb-sub-size-color">
+                    <FontSizeField
+                      size={subStyle.fontSize}
+                      onChange={(n) => useEditor.getState().setSubStyle({ fontSize: n })}
+                    />
+                    <ColorPop
+                      color={subStyle.color}
+                      pickId={SUB_PICK_ID}
+                      swatches={SUBTITLE_SWATCHES}
+                      shadow={subStyle.shadow}
+                      stroke={subStyle.stroke}
+                      onChange={(hex) => useEditor.getState().setSubStyle({ color: hex })}
+                      onToggleShadow={() => useEditor.getState().setSubStyle({ shadow: !subStyle.shadow })}
+                      onToggleStroke={() => useEditor.getState().setSubStyle({ stroke: !subStyle.stroke })}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+        ) : null}
+        <div className="tb-fx-wrap" ref={fxPop}>
+          <button
+            type="button"
+            className={`icon-btn${fxOpen ? " is-on" : ""}`}
+            title="Effects"
+            onClick={() => {
+              setFxOpen((v) => !v);
+              setCanvasOpen(false);
+              setResOpen(false);
+              setSubOpen(false);
+            }}
+          >
+            <IconFx />
+          </button>
+          {fxOpen ? (
+            <div className="tb-float tb-fx-menu">
+              <button
+                type="button"
+                onClick={() => {
+                  useEditor.getState().addEffect("blur");
+                  setFxOpen(false);
+                }}
+              >
+                Gaussian blur
+              </button>
+            </div>
+          ) : null}
+        </div>
         </>
         )}
       </div>
@@ -921,23 +1122,160 @@ export function TransportBar() {
           <button
             type="button"
             className="icon-btn"
-            title="Delete clip or range (Delete)"
+            title={selectedEffectId ? "Delete effect (Delete)" : "Delete clip or range (Delete)"}
             disabled={!canDel}
             onClick={() => useEditor.getState().del()}
           >
             <IconDelete />
           </button>
         </div>
-        <div className="tb-group tb-export-group">
+        <div className="tb-group tb-export-group" ref={exportPop}>
           <button
             type="button"
-            className="icon-btn icon-export"
-            title="Export / save (Ctrl+S)"
+            className={`icon-btn icon-export${exportOpen ? " is-on" : ""}`}
+            title="Export"
             disabled={busy}
-            onClick={() => void useEditor.getState().exportVideo()}
+            onClick={() => {
+              setExportOpen((v) => !v);
+              setManualOpen(false);
+              setCanvasOpen(false);
+              setFxOpen(false);
+              setSubOpen(false);
+            }}
           >
             <IconExport />
           </button>
+          {exportOpen ? (
+            <div className="tb-float tb-export-menu">
+              <div className="tb-export-kicker">Presets</div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setExportOpen(false);
+                  void useEditor.getState().exportVideo({ profile: "youtube" });
+                }}
+              >
+                YouTube
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setExportOpen(false);
+                  void useEditor.getState().exportVideo({ profile: "discord" });
+                }}
+              >
+                Discord
+              </button>
+              <div className="tb-export-sep" />
+              <button
+                type="button"
+                className={manualOpen ? "is-on" : ""}
+                disabled={busy}
+                onClick={() => {
+                  setManualOpen((v) => {
+                    const next = !v;
+                    if (next) useEditor.getState().primeExportCodecs();
+                    return next;
+                  });
+                }}
+              >
+                Manual…
+              </button>
+              {manualOpen ? (
+                <div className="tb-export-manual">
+                  <label>
+                    Codec
+                    <select
+                      value={exportCodecsReady ? manEncoder : ""}
+                      disabled={!exportCodecsReady}
+                      onChange={(e) => setManEncoder(e.target.value)}
+                    >
+                      {exportCodecsReady ? (
+                        exportCodecs.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.label}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">Detecting…</option>
+                      )}
+                    </select>
+                  </label>
+                  <label>
+                    Quality
+                    <span className="tb-export-crf">
+                      <input
+                        type="range"
+                        min={14}
+                        max={32}
+                        value={manCrf}
+                        onChange={(e) => setManCrf(Number(e.target.value))}
+                      />
+                      <span>CRF {manCrf}</span>
+                    </span>
+                  </label>
+                  <label>
+                    Speed
+                    <select value={manPreset} onChange={(e) => setManPreset(e.target.value)}>
+                      <option value="veryfast">Very fast</option>
+                      <option value="fast">Fast</option>
+                      <option value="medium">Medium</option>
+                      <option value="slow">Slow</option>
+                    </select>
+                  </label>
+                  <label>
+                    Audio
+                    <select value={manAudio} onChange={(e) => setManAudio(e.target.value)}>
+                      <option value="128k">128 kbps</option>
+                      <option value="192k">192 kbps</option>
+                      <option value="320k">320 kbps</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="tb-export-go"
+                    disabled={busy}
+                    onClick={() => {
+                      setExportOpen(false);
+                      setManualOpen(false);
+                      void useEditor.getState().exportVideo({
+                        profile: "manual",
+                        encoder: manEncoder,
+                        crf: manCrf,
+                        preset: manPreset,
+                        audioBitrate: manAudio,
+                      });
+                    }}
+                  >
+                    Export
+                  </button>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                title="Coming later"
+                onClick={() => {
+                  setExportOpen(false);
+                  useEditor.setState({ status: "GIF export coming later." });
+                }}
+              >
+                GIF
+              </button>
+              <button
+                type="button"
+                className="tb-export-quick"
+                disabled={busy}
+                onClick={() => {
+                  setExportOpen(false);
+                  void useEditor.getState().exportVideo({ profile: "quick" });
+                }}
+              >
+                Quick
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

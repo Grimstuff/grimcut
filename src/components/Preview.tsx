@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type PointerEvent as RE } from "react";
-import { clipAt, clipSourcePath } from "../core/project";
-import { clipEnd, type Clip } from "../core/types";
+import { clipAt, clipSourcePath, mapTimelineToSource } from "../core/project";
+import { clipBlur, clipEnd, cueAt, type Clip } from "../core/types";
 import {
   bakeTextScale,
   canvasMagnetPoints,
   canvasSnapPoints,
+  canvasSnapThresh,
   clipDrawRect,
   clipXf,
   contrastInk,
@@ -12,6 +13,8 @@ import {
   pointInRotatedRect,
   rectToTransform,
   snapRotation,
+  snapRectMove,
+  snapScaleToCanvas,
   xfScaleX,
   xfScaleY,
 } from "../core/canvas";
@@ -35,6 +38,7 @@ type CanvasDrag =
       armed: boolean;
       sx: number;
       sy: number;
+      axis: "x" | "y" | null;
       before: ReturnType<typeof snapshotClips>;
     }
   | {
@@ -48,6 +52,8 @@ type CanvasDrag =
       startH: number;
       scaleX0: number;
       scaleY0: number;
+      cx0: number;
+      cy0: number;
       before: ReturnType<typeof snapshotClips>;
     }
   | { kind: "rotate"; id: string; rot0: number; ang0: number; typed: string; before: ReturnType<typeof snapshotClips> };
@@ -132,9 +138,14 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
   const overlayUrl = useEditor((s) => s.overlayUrl);
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
+  const playing = useEditor((s) => s.playing);
+  const scrubPreview = useEditor((s) => s.scrubPreview);
   const selectedId = useEditor((s) => s.selectedId);
   const editingTextId = useEditor((s) => s.editingTextId);
   const colorPickId = useEditor((s) => s.colorPickId);
+  const burnSubs = useEditor((s) => s.burnSubs);
+  const subCues = useEditor((s) => s.subCues);
+  const subStyle = useEditor((s) => s.subStyle);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -142,7 +153,17 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     if (!v) return;
     const clear = () => markVideoSeekDone();
     v.addEventListener("seeked", clear);
-    return () => v.removeEventListener("seeked", clear);
+    return () => {
+      v.removeEventListener("seeked", clear);
+      v.pause();
+      v.removeAttribute("src");
+      try {
+        v.load();
+      } catch {
+        /* ignore */
+      }
+      setPreviewVideo(null);
+    };
   }, [previewUrl]);
 
   useEffect(() => {
@@ -153,13 +174,20 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     v.addEventListener("seeked", clear);
     return () => {
       v.removeEventListener("seeked", clear);
+      v.pause();
+      v.removeAttribute("src");
+      try {
+        v.load();
+      } catch {
+        /* ignore */
+      }
       setOverlayVideo(null);
     };
   }, [overlayUrl, project]);
 
   useEffect(() => {
     syncPreviewToPlayhead();
-  }, [playhead, previewUrl, overlayUrl]);
+  }, [playhead, scrubPreview, previewUrl, overlayUrl, project]);
 
   useEffect(() => {
     const el = viewRef.current;
@@ -234,13 +262,14 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
 
   const cw = project.canvasWidth;
   const ch = project.canvasHeight;
-  const baseClip = clipAt(project, playhead, "video", "base");
-  const overClip = clipAt(project, playhead, "video", "over");
-  const textBase = clipAt(project, playhead, "text", "base");
-  const textOver = clipAt(project, playhead, "text", "over");
+  const previewT = scrubPreview ?? playhead;
+  const baseClip = clipAt(project, previewT, "video", "base");
+  const overClip = clipAt(project, previewT, "video", "over");
+  const textBase = clipAt(project, previewT, "text", "base");
+  const textOver = clipAt(project, previewT, "text", "over");
   const selected = project.clips.find((c) => c.id === selectedId && (c.kind === "video" || c.kind === "text")) ?? null;
   const selectedLive =
-    selected && playhead >= selected.timelineStart && playhead < clipEnd(selected) ? selected : null;
+    selected && previewT >= selected.timelineStart && previewT < clipEnd(selected) ? selected : null;
 
   const toCanvas = (clientX: number, clientY: number) => {
     const el = viewRef.current;
@@ -263,11 +292,16 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
       e.stopPropagation();
       const pt = toCanvas(e.clientX, e.clientY);
       const hex = sampleStage(pt.x, pt.y, cw, ch, videoRef.current, overRef.current, baseClip, overClip);
-      if (hex) useEditor.getState().setTextProps(colorPickId, { textColor: hex }, { hug: false });
+      if (hex) {
+        if (colorPickId === "subs") useEditor.getState().setSubStyle({ color: hex });
+        else useEditor.getState().setTextProps(colorPickId, { textColor: hex }, { hug: false });
+      }
       useEditor.getState().setColorPick(null);
       return;
     }
-    if (e.button === 1 || e.altKey) {
+    const tEarly = e.target as HTMLElement;
+    const onScaleHandle = !!tEarly.closest(".bbox-handle");
+    if (e.button === 1 || (e.altKey && !onScaleHandle)) {
       drag.current = { kind: "pan", x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
@@ -275,7 +309,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     if (e.button !== 0) return;
     const pt = toCanvas(e.clientX, e.clientY);
     const hit = hitClip(pt.x, pt.y);
-    const t = e.target as HTMLElement;
+    const t = tEarly;
     const rapid = isRapidSecondClick(e);
     if (t.closest(".bbox-rot") && selectedLive) {
       const rect = rectOf(selectedLive, cw, ch);
@@ -305,6 +339,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         armed: true,
         sx: e.clientX,
         sy: e.clientY,
+        axis: null,
         before: snapshotClips(),
       };
       setMarksOn(true);
@@ -327,6 +362,8 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         startH: rect.h,
         scaleX0: xfScaleX(clipXf(selectedLive)),
         scaleY0: xfScaleY(clipXf(selectedLive)),
+        cx0: rect.cx,
+        cy0: rect.cy,
         before: snapshotClips(),
       };
       setMarksOn(true);
@@ -353,6 +390,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         armed: false,
         sx: e.clientX,
         sy: e.clientY,
+        axis: null,
         before: snapshotClips(),
       };
       return;
@@ -374,7 +412,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     if (!p || !clip) return;
     const xf = clipXf(clip);
     const targets = canvasMagnetPoints(cw, ch);
-    const thresh = Math.max(8, 12 / view.z);
+    const thresh = canvasSnapThresh(view.z);
     if (d.kind === "move") {
       if (!d.armed) {
         if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 5) return;
@@ -384,23 +422,19 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
       }
       let left = d.left0 + (pt.x - d.px);
       let top = d.top0 + (pt.y - d.py);
-      const corners = [
-        { x: left, y: top },
-        { x: left + d.w, y: top },
-        { x: left, y: top + d.h },
-        { x: left + d.w, y: top + d.h },
-        { x: left + d.w / 2, y: top + d.h / 2 },
-      ];
-      let best: { dx: number; dy: number; dist: number; tx: number; ty: number } | null = null;
-      for (const c of corners) {
-        const n = nearestPoint(c.x, c.y, targets, thresh);
-        if (n && (!best || n.dist < best.dist)) best = { dx: n.x - c.x, dy: n.y - c.y, dist: n.dist, tx: n.x, ty: n.y };
+      if (e.shiftKey) {
+        const adx = Math.abs(pt.x - d.px);
+        const ady = Math.abs(pt.y - d.py);
+        if (!d.axis && Math.max(adx, ady) > 6) d.axis = adx >= ady ? "x" : "y";
+        if (d.axis === "x") top = d.top0;
+        if (d.axis === "y") left = d.left0;
+      } else {
+        d.axis = null;
       }
-      if (best) {
-        left += best.dx;
-        top += best.dy;
-        setHotDot({ x: best.tx, y: best.ty });
-      } else setHotDot(null);
+      const snapped = snapRectMove(left, top, d.w, d.h, cw, ch, thresh);
+      left = snapped.left;
+      top = snapped.top;
+      setHotDot(snapped.hot);
       useEditor.getState().liveTransform(d.id, {
         ...xf,
         x: left + d.w / 2 - cw / 2,
@@ -416,21 +450,39 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         my = hit.y;
         setHotDot({ x: hit.x, y: hit.y });
       } else setHotDot(null);
-      let w = Math.max(4, Math.abs(mx - d.ax));
-      let h = Math.max(4, Math.abs(my - d.ay));
       const free = e.shiftKey;
+      const fromCenter = e.altKey;
       const ar = d.startW / Math.max(1, d.startH);
-      if (!free) {
-        if (w / h > ar) h = w / ar;
-        else w = h * ar;
-      }
-      let left = mx < d.ax ? d.ax - w : d.ax;
-      let top = my < d.ay ? d.ay - h : d.ay;
-      const corner = { x: mx < d.ax ? left : left + w, y: my < d.ay ? top : top + h };
-      const hit2 = nearestPoint(corner.x, corner.y, targets, thresh);
-      if (hit2) {
-        mx = hit2.x;
-        my = hit2.y;
+      let w: number;
+      let h: number;
+      let left: number;
+      let top: number;
+      if (fromCenter) {
+        w = Math.max(4, Math.abs(mx - d.cx0) * 2);
+        h = Math.max(4, Math.abs(my - d.cy0) * 2);
+        if (!free) {
+          if (w / h > ar) h = w / ar;
+          else w = h * ar;
+        }
+        left = d.cx0 - w / 2;
+        top = d.cy0 - h / 2;
+        const corner = {
+          x: mx >= d.cx0 ? left + w : left,
+          y: my >= d.cy0 ? top + h : top,
+        };
+        const hit2 = nearestPoint(corner.x, corner.y, targets, thresh);
+        if (hit2) {
+          w = Math.max(4, Math.abs(hit2.x - d.cx0) * 2);
+          h = Math.max(4, Math.abs(hit2.y - d.cy0) * 2);
+          if (!free) {
+            if (w / h > ar) h = w / ar;
+            else w = h * ar;
+          }
+          left = d.cx0 - w / 2;
+          top = d.cy0 - h / 2;
+          setHotDot({ x: hit2.x, y: hit2.y });
+        }
+      } else {
         w = Math.max(4, Math.abs(mx - d.ax));
         h = Math.max(4, Math.abs(my - d.ay));
         if (!free) {
@@ -439,8 +491,36 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         }
         left = mx < d.ax ? d.ax - w : d.ax;
         top = my < d.ay ? d.ay - h : d.ay;
-        setHotDot({ x: hit2.x, y: hit2.y });
+        const corner = { x: mx < d.ax ? left : left + w, y: my < d.ay ? top : top + h };
+        const hit2 = nearestPoint(corner.x, corner.y, targets, thresh);
+        if (hit2) {
+          mx = hit2.x;
+          my = hit2.y;
+          w = Math.max(4, Math.abs(mx - d.ax));
+          h = Math.max(4, Math.abs(my - d.ay));
+          if (!free) {
+            if (w / h > ar) h = w / ar;
+            else w = h * ar;
+          }
+          left = mx < d.ax ? d.ax - w : d.ax;
+          top = my < d.ay ? d.ay - h : d.ay;
+          setHotDot({ x: hit2.x, y: hit2.y });
+        }
       }
+      const snapped = snapScaleToCanvas(left, top, w, h, cw, ch, thresh, {
+        fromCenter,
+        cx0: d.cx0,
+        cy0: d.cy0,
+        ax: d.ax,
+        ay: d.ay,
+        free,
+        ar,
+      });
+      left = snapped.left;
+      top = snapped.top;
+      w = snapped.w;
+      h = snapped.h;
+      if (snapped.hot) setHotDot(snapped.hot);
       if (clip.kind === "text") {
         const sx = d.scaleX0 * (w / Math.max(1, d.startW));
         const sy = d.scaleY0 * (h / Math.max(1, d.startH));
@@ -505,6 +585,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
   const placeVideo = (clip: Clip | null) => {
     if (!clip) return { display: "none" as const };
     const rect = rectOf(clip, cw, ch);
+    const blur = clipBlur(clip);
     return {
       display: "block" as const,
       left: rect.x,
@@ -512,6 +593,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
       width: rect.w,
       height: rect.h,
       transform: `rotate(${rect.rotation}deg)`,
+      filter: blur > 0.05 ? `blur(${blur}px)` : undefined,
     };
   };
 
@@ -526,7 +608,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        title="Wheel zoom · Alt-drag pan · Shift+scale to stretch"
+        title="Wheel zoom · Alt-drag pan · Alt+scale from center · Shift+move axis lock · Shift+scale stretch"
       >
         <div className="canvas-space" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}>
           <div className="canvas-stage" style={{ width: cw, height: ch }}>
@@ -539,6 +621,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
               src={previewUrl}
               tabIndex={-1}
               playsInline
+              muted
               preload="auto"
               disablePictureInPicture
               style={placeVideo(baseClip)}
@@ -552,10 +635,41 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
               src={overClip ? urlOf(overClip) ?? overlayUrl ?? undefined : overlayUrl ?? undefined}
               tabIndex={-1}
               playsInline
+              muted
               preload="auto"
               disablePictureInPicture
               style={placeVideo(overClip)}
             />
+            {(() => {
+              if (!burnSubs || !subCues.length || !project) return null;
+              const t = playing ? playhead : (scrubPreview ?? playhead);
+              const mapped = mapTimelineToSource(project, t);
+              if (!mapped) return null;
+              const srcPath = clipSourcePath(project, mapped.clip);
+              if (srcPath !== project.sourcePath) return null;
+              const cue = cueAt(subCues, mapped.source);
+              if (!cue) return null;
+              return (
+                <div
+                  key={`${cue.start}-${cue.end}-${cue.text}`}
+                  className="preview-subs"
+                  style={{
+                    fontSize: subStyle.fontSize,
+                    fontFamily: subStyle.fontFamily,
+                    color: subStyle.color,
+                    WebkitTextStroke: subStyle.stroke
+                      ? `${Math.max(1, subStyle.fontSize * 0.055)}px ${contrastInk(subStyle.color)}`
+                      : undefined,
+                    paintOrder: subStyle.stroke ? "stroke fill" : undefined,
+                    textShadow: subStyle.shadow
+                      ? `${Math.max(1, subStyle.fontSize * 0.05)}px ${Math.max(1, subStyle.fontSize * 0.07)}px ${Math.max(2, subStyle.fontSize * 0.1)}px #000`
+                      : undefined,
+                  }}
+                >
+                  {cue.text}
+                </div>
+              );
+            })()}
             {[textOver, textBase].filter(Boolean).map((c) => (
               <TextBox
                 key={c!.id}
@@ -657,6 +771,7 @@ function TextBox({
         fontSize: clip.fontSize ?? 64,
         color: clip.textColor ?? "#fff",
         textAlign: clip.textAlign ?? "center",
+        filter: clipBlur(clip) > 0.05 ? `blur(${clipBlur(clip)}px)` : undefined,
         WebkitTextStroke: clip.textStroke ? `${Math.max(1, (clip.fontSize ?? 64) * 0.055)}px ${contrastInk(clip.textColor ?? "#fff")}` : undefined,
         paintOrder: clip.textStroke ? "stroke fill" : undefined,
         textShadow: clip.textShadow

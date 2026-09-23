@@ -56,6 +56,16 @@ function onKey(e: KeyboardEvent) {
     e.preventDefault();
     st.redo();
   }
+  if (e.code === "Escape") {
+    if (st.clipSel.length) {
+      e.preventDefault();
+      st.cancelGainDraft();
+      st.setClipSel([]);
+      st.setSelLane(null);
+      st.setRange(null);
+      return;
+    }
+  }
   if (e.code === "Delete" || e.code === "Backspace") {
     e.preventDefault();
     st.del();

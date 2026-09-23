@@ -6,7 +6,9 @@ import {
   type MediaInfo,
   type PlaybackFollow,
   type VideoProject,
+  clipBlur,
   clipDuration,
+  clipGainAtSource,
   clipEnd,
   cloneClip,
   newId,
@@ -161,11 +163,11 @@ export function snapStart(
   let start = Math.max(0, proposed);
   const dur = clipDuration(moving);
   let best = start;
-  let bestDist = threshold;
-  const consider = (c: number) => {
+  let bestDist = Infinity;
+  const consider = (c: number, maxDist = threshold) => {
     const v = Math.max(0, c);
     const d = Math.abs(v - start);
-    if (d <= bestDist) {
+    if (d <= maxDist && d < bestDist) {
       bestDist = d;
       best = v;
     }
@@ -178,6 +180,11 @@ export function snapStart(
     consider(other.timelineStart);
     consider(other.timelineStart - dur);
     consider(clipEnd(other) - dur);
+    const av =
+      (moving.kind === "video" && other.kind === "audio") || (moving.kind === "audio" && other.kind === "video");
+    if (av && Math.abs(clipDuration(other) - dur) <= 0.05) {
+      consider(other.timelineStart, Math.max(threshold, 0.18));
+    }
   }
   return best;
 }
@@ -204,17 +211,21 @@ export function snapEdge(p: VideoProject, ignoreIds: Set<string>, proposed: numb
 }
 
 export type FlatSeg =
-  | { gap: false; sourceStart: number; sourceEnd: number; sourcePath: string }
+  | { gap: false; sourceStart: number; sourceEnd: number; sourcePath: string; gainDb?: number }
   | { gap: true; duration: number };
 
 /** Flatten a kind over the full timeline. Empty regions become gaps (black / silence). */
-export function flattenKind(p: VideoProject, kind: ClipKind): FlatSeg[] {
+export function flattenKind(p: VideoProject, kind: ClipKind, layer?: ClipLayer): FlatSeg[] {
   const end = timelineDuration(p);
   if (end <= 0) return [];
   const marks = new Set<number>([0, end]);
-  for (const c of clipsOn(p, kind)) {
+  for (const c of clipsOn(p, kind, layer)) {
     marks.add(c.timelineStart);
     marks.add(clipEnd(c));
+    for (const g of c.gainSpans ?? []) {
+      marks.add(c.timelineStart + (g.sourceStart - c.sourceStart));
+      marks.add(c.timelineStart + (g.sourceEnd - c.sourceStart));
+    }
   }
   const sorted = [...marks].sort((a, b) => a - b);
   const out: FlatSeg[] = [];
@@ -222,7 +233,7 @@ export function flattenKind(p: VideoProject, kind: ClipKind): FlatSeg[] {
     const a = sorted[i];
     const b = sorted[i + 1];
     if (b - a < 0.001) continue;
-    const c = clipAt(p, (a + b) / 2, kind);
+    const c = clipAt(p, (a + b) / 2, kind, layer);
     if (!c) {
       const last = out[out.length - 1];
       if (last && last.gap) last.duration += b - a;
@@ -232,9 +243,17 @@ export function flattenKind(p: VideoProject, kind: ClipKind): FlatSeg[] {
     const srcS = c.sourceStart + (a - c.timelineStart);
     const srcE = c.sourceStart + (b - c.timelineStart);
     const srcPath = clipSourcePath(p, c);
+    const gainDb = clipGainAtSource(c, srcS);
     const last = out[out.length - 1];
-    if (last && !last.gap && last.sourcePath === srcPath && Math.abs(last.sourceEnd - srcS) < 0.02) last.sourceEnd = srcE;
-    else out.push({ gap: false, sourceStart: srcS, sourceEnd: srcE, sourcePath: srcPath });
+    if (
+      last &&
+      !last.gap &&
+      last.sourcePath === srcPath &&
+      Math.abs(last.sourceEnd - srcS) < 0.02 &&
+      Math.abs((last.gainDb ?? 0) - gainDb) < 0.05
+    ) {
+      last.sourceEnd = srcE;
+    } else out.push({ gap: false, sourceStart: srcS, sourceEnd: srcE, sourcePath: srcPath, gainDb });
   }
   return out.filter((r) => (r.gap ? r.duration > 0.01 : r.sourceEnd - r.sourceStart > 0.01));
 }
@@ -255,6 +274,7 @@ export type CompLayer = {
   rotation: number;
   srcWidth: number;
   srcHeight: number;
+  blur: number;
 };
 
 export type CompText = {
@@ -322,6 +342,7 @@ export function flattenCanvas(
           rotation: xf.rotation,
           srcWidth: size.w,
           srcHeight: size.h,
+          blur: clipBlur(c),
         });
       }
       const tx = clipAt(p, mid, "text", layer);

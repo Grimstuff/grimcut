@@ -27,6 +27,9 @@
   --gp-tab-accent: var(--gp-accent);
   --gp-focus-ring: rgba(0, 120, 212, 0.45);
   --gp-dirty: var(--gp-accent);
+  --gp-win-accent: var(--gp-accent);
+  --gp-win-accent-hover: var(--gp-accent-hover);
+  --gp-win-accent-fg: var(--gp-accent-fg);
   color-scheme: light;
 }
 
@@ -58,6 +61,9 @@
   --gp-tab-accent: var(--gp-accent);
   --gp-focus-ring: rgba(0, 120, 212, 0.45);
   --gp-dirty: var(--gp-accent);
+  --gp-win-accent: var(--gp-accent);
+  --gp-win-accent-hover: var(--gp-accent-hover);
+  --gp-win-accent-fg: var(--gp-accent-fg);
   color-scheme: dark;
 }
 

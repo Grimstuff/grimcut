@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fromMedia, flattenCanvas, flattenKind, mapTimelineToSource, timelineDuration } from "./project";
-import { tryAddOverlayFromMedia, tryAddText, tryDelete, tryLiftRange, tryMove, trySlice, tryToggleLink, tryTrim } from "./edits";
+import { fromMedia, flattenCanvas, flattenKind, mapTimelineToSource, snapStart, timelineDuration } from "./project";
+import { collectLaneSpans, extractSpans, tryAddOverlayFromMedia, tryAddText, tryDelete, tryLiftRange, tryLinkPair, tryMove, tryMoveIds, trySlice, tryToggleLink, tryTrim } from "./edits";
 import type { MediaInfo } from "./types";
 
 const info: MediaInfo = {
@@ -59,12 +59,79 @@ describe("timeline model", () => {
     expect(timelineDuration({ ...p, clips: d.clips })).toBe(10);
   });
 
+  it("linked group cannot slide a later audio past the video at 0", () => {
+    const p = fromMedia(info);
+    const v = p.clips.find((c) => c.kind === "video")!;
+    const a = p.clips.find((c) => c.kind === "audio")!;
+    v.timelineStart = 2;
+    a.timelineStart = 6;
+    a.sourceEnd = 8;
+    const r = tryMove(p, a.id, 1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const nv = r.clips.find((c) => c.id === v.id)!;
+    const na = r.clips.find((c) => c.id === a.id)!;
+    expect(nv.timelineStart).toBe(0);
+    expect(na.timelineStart).toBe(4);
+  });
+
+  it("moving a base video takes overlapping overlay with it", () => {
+    const p = fromMedia(info);
+    const extra = tryAddOverlayFromMedia(p, { ...info, path: "C:/b.mp4", duration: 3, hasAudio: true }, 2);
+    expect(extra.ok).toBe(true);
+    if (!extra.ok) return;
+    const p2 = { ...p, clips: extra.clips };
+    const baseV = p2.clips.find((c) => c.kind === "video" && c.layer === "base")!;
+    const overV = p2.clips.find((c) => c.kind === "video" && c.layer === "over")!;
+    const moved = tryMove(p2, baseV.id, 1);
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    const over2 = moved.clips.find((c) => c.id === overV.id)!;
+    expect(over2.timelineStart).toBeCloseTo(3);
+  });
+
+  it("overlapping base audio is promoted to overlay", () => {
+    const p = fromMedia(info);
+    const cut = trySlice(p, 5);
+    expect(cut.ok).toBe(true);
+    if (!cut.ok) return;
+    const p2 = { ...p, clips: cut.clips };
+    for (const c of [...p2.clips]) {
+      if (!c.linkGroup) continue;
+      const u = tryToggleLink(p2, c.id);
+      if (u.ok) p2.clips = u.clips;
+    }
+    const leftA = p2.clips.find((c) => c.kind === "audio" && Math.abs(c.timelineStart) < 0.01)!;
+    const moved = tryMove(p2, leftA.id, 3);
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    expect(moved.clips.find((c) => c.id === leftA.id)?.layer).toBe("over");
+    expect(moved.clips.some((c) => c.kind === "audio" && c.layer === "base")).toBe(true);
+  });
+
+  it("snaps equal-length unlinked A/V together", () => {
+    const p = fromMedia(info);
+    const un = tryToggleLink(p, p.clips[0].id);
+    expect(un.ok).toBe(true);
+    if (!un.ok) return;
+    const p2 = { ...p, clips: un.clips };
+    const a = p2.clips.find((c) => c.kind === "audio")!;
+    a.timelineStart = 0.14;
+    expect(snapStart(p2, a, 0.14, 0.08)).toBeCloseTo(0);
+  });
+
   it("unlink then independent", () => {
     const p = fromMedia(info);
     const r = tryToggleLink(p, p.clips[0].id);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.clips.every((c) => c.linkGroup === null)).toBe(true);
+    const v = r.clips.find((c) => c.kind === "video")!;
+    const a = r.clips.find((c) => c.kind === "audio")!;
+    const linked = tryLinkPair({ ...p, clips: r.clips }, v.id, a.id);
+    expect(linked.ok).toBe(true);
+    if (!linked.ok) return;
+    expect(linked.clips.find((c) => c.id === v.id)?.linkGroup).toBe(linked.clips.find((c) => c.id === a.id)?.linkGroup);
   });
 
   it("drop second file becomes overlay at playhead", () => {
@@ -180,6 +247,45 @@ describe("timeline model", () => {
     if (!r.ok) return;
     expect(r.clips.filter((c) => c.kind === "video")).toHaveLength(1);
     expect(r.clips.filter((c) => c.kind === "audio")).toHaveLength(2);
+  });
+
+  it("box select on video includes linked audio", () => {
+    const p = fromMedia(info);
+    const spans = collectLaneSpans(p, "video", 1, 4);
+    expect(spans.some((s) => p.clips.find((c) => c.id === s.clipId)?.kind === "video")).toBe(true);
+    expect(spans.some((s) => p.clips.find((c) => c.id === s.clipId)?.kind === "audio")).toBe(true);
+  });
+
+  it("box select on unlinked audio does not include video", () => {
+    const p = fromMedia(info);
+    const un = tryToggleLink(p, p.clips[0].id);
+    if (!un.ok) throw new Error("unlink");
+    const p2 = { ...p, clips: un.clips };
+    const spans = collectLaneSpans(p2, "audio", 1, 4);
+    expect(spans.every((s) => p2.clips.find((c) => c.id === s.clipId)?.kind === "audio")).toBe(true);
+  });
+
+  it("extracting a mid span splits the clip", () => {
+    const p = fromMedia(info);
+    const v = p.clips.find((c) => c.kind === "video")!;
+    const ex = extractSpans(p, [{ clipId: v.id, start: 2, end: 5 }]);
+    const vids = ex.clips.filter((c) => c.kind === "video").sort((a, b) => a.timelineStart - b.timelineStart);
+    expect(vids.length).toBe(3);
+    expect(vids[1].timelineStart).toBeCloseTo(2);
+    expect(ex.ids).toHaveLength(1);
+  });
+
+  it("moving a partial extract leaves leftovers", () => {
+    const p = fromMedia(info);
+    const v = p.clips.find((c) => c.kind === "video")!;
+    const ex = extractSpans(p, [{ clipId: v.id, start: 2, end: 5 }]);
+    const mid = ex.clips.find((c) => c.id === ex.ids[0])!;
+    const moved = tryMoveIds({ ...p, clips: ex.clips }, new Set(ex.ids), 1);
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    const m = moved.clips.find((c) => c.id === mid.id)!;
+    expect(m.timelineStart).toBeCloseTo(3);
+    expect(moved.clips.filter((c) => c.kind === "video").length).toBeGreaterThanOrEqual(3);
   });
 
   it("flatten keeps timeline holes as gaps", () => {

@@ -3,6 +3,7 @@ import {
   type ClipKind,
   type ClipLayer,
   type ClipboardChunk,
+  type ClipSpan,
   type MediaInfo,
   type VideoProject,
   MIN_CLIP,
@@ -72,6 +73,37 @@ export function trySlice(p: VideoProject, at: number, onlyId?: string): EditResu
   return { ok: true, clips };
 }
 
+/** Close empty timeline holes so remaining clips pack left. */
+export function collapseBlank(clips: Clip[]): Clip[] {
+  if (clips.length === 0) return clips;
+  const segs = clips
+    .map((c) => ({ t0: c.timelineStart, t1: clipEnd(c) }))
+    .sort((a, b) => a.t0 - b.t0);
+  const merged: { t0: number; t1: number }[] = [];
+  for (const s of segs) {
+    const last = merged[merged.length - 1];
+    if (!last || s.t0 > last.t1 + 0.02) merged.push({ ...s });
+    else last.t1 = Math.max(last.t1, s.t1);
+  }
+  if (!merged.length) return clips;
+  const holes: { start: number; dur: number }[] = [];
+  if (merged[0].t0 > 0.02) holes.push({ start: 0, dur: merged[0].t0 });
+  for (let i = 0; i < merged.length - 1; i++) {
+    const gap = merged[i + 1].t0 - merged[i].t1;
+    if (gap > 0.02) holes.push({ start: merged[i].t1, dur: gap });
+  }
+  if (!holes.length) return clips;
+  return clips.map((c) => {
+    let s = 0;
+    for (const h of holes) {
+      if (c.timelineStart + 1e-4 >= h.start + h.dur) s += h.dur;
+      else if (c.timelineStart >= h.start) s += c.timelineStart - h.start;
+    }
+    if (s < 0.001) return c;
+    return { ...c, timelineStart: Math.max(0, c.timelineStart - s) };
+  });
+}
+
 export function tryDelete(p: VideoProject, id: string): EditResult {
   const clip = p.clips.find((c) => c.id === id);
   if (!clip) return { ok: false, error: "No clip selected." };
@@ -127,6 +159,41 @@ export function tryTrim(
 
 function rangeOverlaps(c: Clip, start: number, end: number) {
   return c.timelineStart < end && clipEnd(c) > start;
+}
+
+function overlapAmt(a: Clip, b: Clip) {
+  return Math.min(clipEnd(a), clipEnd(b)) - Math.max(a.timelineStart, b.timelineStart);
+}
+
+function bestBaseVideo(clips: Clip[], clip: Clip): Clip | null {
+  let best: Clip | null = null;
+  let bestO = MIN_CLIP;
+  for (const v of clips) {
+    if (v.kind !== "video" || v.layer !== "base" || v.id === clip.id) continue;
+    const o = overlapAmt(clip, v);
+    if (o > bestO) {
+      bestO = o;
+      best = v;
+    }
+  }
+  return best;
+}
+
+/** Linked A/V plus overlay clips hosted by a moving base video. */
+function expandMoveIds(clips: Clip[], seed: Set<string>): Set<string> {
+  const ids = new Set(seed);
+  const movingBase = clips.some((c) => ids.has(c.id) && c.kind === "video" && c.layer === "base");
+  if (!movingBase) return ids;
+  for (const c of clips) {
+    if (c.layer !== "over" || ids.has(c.id)) continue;
+    const host = bestBaseVideo(clips, c);
+    if (!host || !ids.has(host.id)) continue;
+    ids.add(c.id);
+    if (c.linkGroup) {
+      for (const m of clips) if (m.linkGroup === c.linkGroup) ids.add(m.id);
+    }
+  }
+  return ids;
 }
 
 function sameStack(a: Clip, b: Clip) {
@@ -219,12 +286,18 @@ export function resolveOccupancy(p: VideoProject, placedIds: Set<string>): EditR
     if (!placedIds.has(me.id) || me.layer !== "over") continue;
     next = punchLayer(next, me.kind, "over", me.timelineStart, clipEnd(me), placedIds);
   }
+  const stayOver = new Set<string>();
   for (const me of next) {
     if (me.layer !== "over") continue;
-    const start = me.timelineStart;
-    const end = clipEnd(me);
-    const covering = next.some((c) => c.id !== me.id && sameStack(c, me) && rangeOverlaps(c, start, end));
-    if (!covering) me.layer = "base";
+    const covering = next.some((c) => c.id !== me.id && sameStack(c, me) && rangeOverlaps(c, me.timelineStart, clipEnd(me)));
+    if (!covering) continue;
+    stayOver.add(me.id);
+    if (me.linkGroup) {
+      for (const c of next) if (c.linkGroup === me.linkGroup) stayOver.add(c.id);
+    }
+  }
+  for (const me of next) {
+    if (me.layer === "over" && !stayOver.has(me.id)) me.layer = "base";
   }
   if (next.filter((c) => c.kind === "video").length === 0) {
     return { ok: false, error: "That would remove all video." };
@@ -235,16 +308,174 @@ export function resolveOccupancy(p: VideoProject, placedIds: Set<string>): EditR
 export function tryMove(p: VideoProject, id: string, timelineStart: number): EditResult {
   const clip = p.clips.find((c) => c.id === id);
   if (!clip) return { ok: false, error: "No clip selected." };
-  const ids = new Set<string>([id]);
+  const seed = new Set<string>([id]);
   if (clip.linkGroup) {
-    for (const c of p.clips) if (c.linkGroup === clip.linkGroup) ids.add(c.id);
+    for (const c of p.clips) if (c.linkGroup === clip.linkGroup) seed.add(c.id);
   }
-  const delta = Math.max(0, timelineStart) - clip.timelineStart;
+  return tryMoveIds(p, seed, timelineStart - clip.timelineStart);
+}
+
+export function tryMoveIds(p: VideoProject, seed: Set<string>, delta: number): EditResult {
+  const ids = expandMoveIds(p.clips, seed);
+  let d = delta;
+  let minStart = Infinity;
+  for (const c of p.clips) if (ids.has(c.id)) minStart = Math.min(minStart, c.timelineStart);
+  if (minStart + d < 0) d = -minStart;
   const clips = p.clips.map((c) => {
-    if (ids.has(c.id)) return { ...c, timelineStart: Math.max(0, c.timelineStart + delta) };
+    if (ids.has(c.id)) return { ...c, timelineStart: c.timelineStart + d };
     return cloneClip(c);
   });
   return resolveOccupancy({ ...p, clips }, ids);
+}
+
+export function mergeSpans(spans: ClipSpan[]): ClipSpan[] {
+  const by = new Map<string, ClipSpan[]>();
+  for (const s of spans) {
+    const start = Math.min(s.start, s.end);
+    const end = Math.max(s.start, s.end);
+    if (end - start < MIN_CLIP) continue;
+    const list = by.get(s.clipId) ?? [];
+    list.push({ clipId: s.clipId, start, end });
+    by.set(s.clipId, list);
+  }
+  const out: ClipSpan[] = [];
+  for (const list of by.values()) {
+    list.sort((a, b) => a.start - b.start);
+    let cur = list[0];
+    for (let i = 1; i < list.length; i++) {
+      const n = list[i];
+      if (n.start <= cur.end + 0.02) cur = { ...cur, end: Math.max(cur.end, n.end) };
+      else {
+        out.push(cur);
+        cur = n;
+      }
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+export function collectLaneSpans(p: VideoProject, lane: ClipKind, t0: number, t1: number): ClipSpan[] {
+  const a = Math.min(t0, t1);
+  const b = Math.max(t0, t1);
+  const kinds: ClipKind[] = lane === "audio" ? ["audio"] : ["video", "text"];
+  const spans: ClipSpan[] = [];
+  const seen = new Set<string>();
+  for (const c of p.clips) {
+    if (!kinds.includes(c.kind) || seen.has(c.id)) continue;
+    const s = Math.max(c.timelineStart, a);
+    const e = Math.min(clipEnd(c), b);
+    if (e - s < MIN_CLIP) continue;
+    spans.push({ clipId: c.id, start: s, end: e });
+    seen.add(c.id);
+    const mate = partner(p, c);
+    if (mate && !seen.has(mate.id)) {
+      const s2 = Math.max(mate.timelineStart, a);
+      const e2 = Math.min(clipEnd(mate), b);
+      if (e2 - s2 >= MIN_CLIP) {
+        spans.push({ clipId: mate.id, start: s2, end: e2 });
+        seen.add(mate.id);
+      }
+    }
+  }
+  return mergeSpans(spans);
+}
+
+export function wholeClipSpans(p: VideoProject, clipId: string): ClipSpan[] {
+  const c = p.clips.find((x) => x.id === clipId);
+  if (!c) return [];
+  const spans: ClipSpan[] = [{ clipId: c.id, start: c.timelineStart, end: clipEnd(c) }];
+  const mate = partner(p, c);
+  if (mate) spans.push({ clipId: mate.id, start: mate.timelineStart, end: clipEnd(mate) });
+  return spans;
+}
+
+export function extractSpans(
+  p: VideoProject,
+  spans: ClipSpan[],
+): { clips: Clip[]; ids: string[] } {
+  const merged = mergeSpans(spans);
+  const byClip = new Map<string, ClipSpan[]>();
+  for (const s of merged) {
+    const list = byClip.get(s.clipId) ?? [];
+    list.push(s);
+    byClip.set(s.clipId, list);
+  }
+  const ids: string[] = [];
+  const next: Clip[] = [];
+  const groupKey = new Map<string, string>();
+  const groupFor = (key: string) => {
+    let g = groupKey.get(key);
+    if (!g) {
+      g = newId();
+      groupKey.set(key, g);
+    }
+    return g;
+  };
+
+  for (const c of p.clips) {
+    const parts = byClip.get(c.id);
+    if (!parts) {
+      next.push(cloneClip(c));
+      continue;
+    }
+    parts.sort((x, y) => x.start - y.start);
+    const t0 = c.timelineStart;
+    const t1 = clipEnd(c);
+    let cursor = t0;
+    for (const s of parts) {
+      const a = Math.max(s.start, t0);
+      const b = Math.min(s.end, t1);
+      if (b - a < MIN_CLIP) continue;
+      if (a > cursor + MIN_CLIP) {
+        const g = c.linkGroup ? groupFor(`${c.linkGroup}:L:${cursor.toFixed(3)}:${a.toFixed(3)}`) : null;
+        next.push({
+          ...cloneClip(c),
+          id: newId(),
+          timelineStart: cursor,
+          sourceStart: c.sourceStart + (cursor - t0),
+          sourceEnd: c.sourceStart + (a - t0),
+          linkGroup: g,
+        });
+      }
+      const full = a <= t0 + MIN_CLIP && b >= t1 - MIN_CLIP && parts.length === 1;
+      const id = full ? c.id : newId();
+      const g = c.linkGroup ? groupFor(`${c.linkGroup}:M:${a.toFixed(3)}:${b.toFixed(3)}`) : null;
+      next.push({
+        ...cloneClip(c),
+        id,
+        timelineStart: a,
+        sourceStart: c.sourceStart + (a - t0),
+        sourceEnd: c.sourceStart + (b - t0),
+        linkGroup: g,
+      });
+      ids.push(id);
+      cursor = Math.max(cursor, b);
+    }
+    if (t1 > cursor + MIN_CLIP) {
+      const g = c.linkGroup ? groupFor(`${c.linkGroup}:R:${cursor.toFixed(3)}:${t1.toFixed(3)}`) : null;
+      next.push({
+        ...cloneClip(c),
+        id: newId(),
+        timelineStart: cursor,
+        sourceStart: c.sourceStart + (cursor - t0),
+        sourceEnd: c.sourceEnd,
+        linkGroup: g,
+      });
+    }
+  }
+  return { clips: next, ids };
+}
+
+export function tryDeleteSpans(p: VideoProject, spans: ClipSpan[]): EditResult {
+  const ex = extractSpans(p, spans);
+  if (ex.ids.length === 0) return { ok: false, error: "Nothing selected." };
+  const drop = new Set(ex.ids);
+  const clips = ex.clips.filter((c) => !drop.has(c.id));
+  if (clips.filter((c) => c.kind === "video").length === 0) {
+    return { ok: false, error: "That would remove all video." };
+  }
+  return { ok: true, clips };
 }
 
 export function tryToggleLink(p: VideoProject, id: string): EditResult {
@@ -265,6 +496,21 @@ export function tryToggleLink(p: VideoProject, id: string): EditResult {
   const g = newId();
   me.linkGroup = g;
   mate.linkGroup = g;
+  return { ok: true, clips };
+}
+
+/** Bind a specific video+audio pair. Both must be unlinked. */
+export function tryLinkPair(p: VideoProject, aId: string, bId: string): EditResult {
+  const clips = p.clips.map(cloneClip);
+  const a = clips.find((c) => c.id === aId);
+  const b = clips.find((c) => c.id === bId);
+  if (!a || !b) return { ok: false, error: "Missing clip." };
+  const kinds = new Set([a.kind, b.kind]);
+  if (!kinds.has("video") || !kinds.has("audio")) return { ok: false, error: "Link a video to an audio clip." };
+  if (a.linkGroup || b.linkGroup) return { ok: false, error: "Unlink first." };
+  const g = newId();
+  a.linkGroup = g;
+  b.linkGroup = g;
   return { ok: true, clips };
 }
 
@@ -418,6 +664,28 @@ export function tryAddOverlayFromMedia(p: VideoProject, info: MediaInfo, at: num
     });
   }
   return resolveOccupancy({ ...p, clips }, ids);
+}
+
+/** Place an audio-only file on the audio lane. Occupancy sends it to L2 if L1 is busy. */
+export function tryAddAudioFromMedia(p: VideoProject, info: MediaInfo, at: number): EditResult {
+  const duration = info.duration > 0 ? info.duration : 0;
+  if (duration < MIN_CLIP) return { ok: false, error: "That file is too short." };
+  if (!info.hasAudio) return { ok: false, error: "No audio in that file." };
+  const start = Math.max(0, at);
+  const other = info.path !== p.sourcePath ? info.path : undefined;
+  const clips = p.clips.map(cloneClip);
+  const id = newId();
+  clips.push({
+    id,
+    kind: "audio",
+    layer: "base",
+    timelineStart: start,
+    sourceStart: 0,
+    sourceEnd: duration,
+    linkGroup: null,
+    sourcePath: other,
+  });
+  return resolveOccupancy({ ...p, clips }, new Set([id]));
 }
 
 export function tryAddText(p: VideoProject, at: number): EditResult {

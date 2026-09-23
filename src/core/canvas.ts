@@ -179,6 +179,134 @@ export function canvasMagnetPoints(cw: number, ch: number): { x: number; y: numb
   return pts;
 }
 
+/** One knob for every clip-on-canvas snap (move, scale, cover). Canvas pixels at zoom 1. */
+export const CANVAS_SNAP = 14;
+
+export function canvasSnapThresh(viewZoom: number) {
+  return CANVAS_SNAP / Math.max(0.2, viewZoom);
+}
+
+export function canvasEdgeLines(cw: number, ch: number) {
+  return {
+    xs: [0, cw / 3, cw / 2, (2 * cw) / 3, cw],
+    ys: [0, ch / 3, ch / 2, (2 * ch) / 3, ch],
+  };
+}
+
+/** Snap a moving rect’s edges independently (top→canvas top, not only corners). */
+export function snapRectMove(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  cw: number,
+  ch: number,
+  thresh: number,
+): { left: number; top: number; hot: { x: number; y: number } | null } {
+  const { xs, ys } = canvasEdgeLines(cw, ch);
+  const xEdges = [left, left + w / 2, left + w];
+  const yEdges = [top, top + h / 2, top + h];
+  let dx = 0;
+  let dy = 0;
+  let bestX = thresh + 1;
+  let bestY = thresh + 1;
+  let hx: number | null = null;
+  let hy: number | null = null;
+  for (const e of xEdges) {
+    for (const t of xs) {
+      const d = Math.abs(e - t);
+      if (d < bestX) {
+        bestX = d;
+        dx = t - e;
+        hx = t;
+      }
+    }
+  }
+  for (const e of yEdges) {
+    for (const t of ys) {
+      const d = Math.abs(e - t);
+      if (d < bestY) {
+        bestY = d;
+        dy = t - e;
+        hy = t;
+      }
+    }
+  }
+  const nl = bestX <= thresh ? left + dx : left;
+  const nt = bestY <= thresh ? top + dy : top;
+  let hot: { x: number; y: number } | null = null;
+  if (hx != null && bestX <= thresh && hy != null && bestY <= thresh) hot = { x: hx, y: hy };
+  else if (hx != null && bestX <= thresh) hot = { x: hx, y: nt + h / 2 };
+  else if (hy != null && bestY <= thresh) hot = { x: nl + w / 2, y: hy };
+  return { left: nl, top: nt, hot };
+}
+
+/** Snap a scale rect so bbox edges catch the canvas frame (contain / cover). */
+export function snapScaleToCanvas(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  cw: number,
+  ch: number,
+  thresh: number,
+  opts: {
+    fromCenter: boolean;
+    cx0: number;
+    cy0: number;
+    ax: number;
+    ay: number;
+    free: boolean;
+    ar: number;
+  },
+): { left: number; top: number; w: number; h: number; hot: { x: number; y: number } | null } {
+  const ar = Math.max(0.01, opts.ar);
+  const pinL = !opts.fromCenter && Math.abs(left - opts.ax) < 0.75;
+  const pinT = !opts.fromCenter && Math.abs(top - opts.ay) < 0.75;
+  const pinR = !opts.fromCenter && Math.abs(left + w - opts.ax) < 0.75;
+  const pinB = !opts.fromCenter && Math.abs(top + h - opts.ay) < 0.75;
+
+  type Cand = { score: number; w: number; h: number; hot: { x: number; y: number } };
+  const cands: Cand[] = [];
+
+  const pushW = (nw: number, dist: number, hx: number) => {
+    if (!Number.isFinite(nw) || nw < 4 || dist > thresh) return;
+    const nh = opts.free ? h : nw / ar;
+    cands.push({ score: dist, w: Math.max(4, nw), h: Math.max(4, nh), hot: { x: hx, y: opts.fromCenter ? opts.cy0 : top + h / 2 } });
+  };
+  const pushH = (nh: number, dist: number, hy: number) => {
+    if (!Number.isFinite(nh) || nh < 4 || dist > thresh) return;
+    const nw = opts.free ? w : nh * ar;
+    cands.push({ score: dist, w: Math.max(4, nw), h: Math.max(4, nh), hot: { x: opts.fromCenter ? opts.cx0 : left + w / 2, y: hy } });
+  };
+
+  if (opts.fromCenter) {
+    pushW(opts.cx0 * 2, Math.abs(left - 0), 0);
+    pushW((cw - opts.cx0) * 2, Math.abs(left + w - cw), cw);
+    pushH(opts.cy0 * 2, Math.abs(top - 0), 0);
+    pushH((ch - opts.cy0) * 2, Math.abs(top + h - ch), ch);
+  } else {
+    if (!pinL) pushW(opts.ax - 0, Math.abs(left - 0), 0);
+    if (!pinR) pushW(cw - opts.ax, Math.abs(left + w - cw), cw);
+    if (!pinT) pushH(opts.ay - 0, Math.abs(top - 0), 0);
+    if (!pinB) pushH(ch - opts.ay, Math.abs(top + h - ch), ch);
+  }
+
+  if (cands.length === 0) return { left, top, w, h, hot: null };
+  cands.sort((a, b) => a.score - b.score);
+  const best = cands[0];
+  let nl: number;
+  let nt: number;
+  if (opts.fromCenter) {
+    nl = opts.cx0 - best.w / 2;
+    nt = opts.cy0 - best.h / 2;
+  } else {
+    nl = pinL ? opts.ax : pinR ? opts.ax - best.w : left;
+    nt = pinT ? opts.ay : pinB ? opts.ay - best.h : top;
+  }
+  return { left: nl, top: nt, w: best.w, h: best.h, hot: best.hot };
+}
+
 export function nearestPoint(
   px: number,
   py: number,

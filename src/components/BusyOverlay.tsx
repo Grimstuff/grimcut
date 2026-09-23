@@ -11,7 +11,12 @@ export function BusyOverlay() {
         <div className="busy-track">
           <div className="busy-fill" style={{ width: `${pct}%` }} />
         </div>
-        <div className="busy-pct">{Math.round(pct)}%</div>
+        <div className="busy-row">
+          <div className="busy-pct">{Math.round(pct)}%</div>
+          <button type="button" className="busy-cancel" onClick={() => useEditor.getState().cancelWork()}>
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   );

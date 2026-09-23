@@ -8,7 +8,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "vitest run",
+    "grimcut": "tsx src/cli/grimcut.ts",
+    "mcp": "tsx src/cli/mcp.ts",
+    "package:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-desktop.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -23,6 +26,8 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "@types/node": "^22.15.3",
+    "tsx": "^4.19.4",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
     "vitest": "^3.2.4"

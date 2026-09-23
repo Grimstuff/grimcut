@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { Clip, ClipKind, ClipboardChunk, MediaInfo, TimeRange, VideoProject } from "../core/types";
-import { formatTime } from "../core/types";
+import type { Clip, ClipEffect, ClipEffectKind, ClipKind, ClipboardChunk, ClipSpan, MediaInfo, SubCue, SubStyle, TimeRange, VideoProject } from "../core/types";
+import { DEFAULT_SUB_STYLE, textSubtitleTracks } from "../core/types";
+import { addGainRegion, clipBlur, clipEnd, formatTime, newId } from "../core/types";
 import {
   clipAt,
   flattenCanvas,
@@ -20,20 +21,36 @@ import {
   UndoStack,
   chunkFromRange,
   tryDelete,
+  mergeSpans,
+  tryAddAudioFromMedia,
   tryAddOverlayFromMedia,
+  collapseBlank,
   tryAddText,
+  tryDeleteSpans,
   tryLiftRange,
   tryMove,
+  tryMoveIds,
   tryPaste,
+  tryLinkPair,
   trySlice,
   tryToggleLink,
   tryTrim,
 } from "../core/edits";
 import { canStreamCopyAllClips, snapToKeyframe } from "../core/keyframes";
 import { fitWindowToVideo } from "../lib/fitWindow";
+import { soundUnload } from "../lib/previewSound";
 
 const history = new UndoStack();
 const VIDEO_RE = /\.(mp4|mkv|mov|avi|webm|m4v|wmv)$/i;
+const AUDIO_RE = /\.(mp3|wav|flac|aac|m4a|ogg|opus|wma|aiff|aif|oga)$/i;
+
+function isMediaPath(path: string) {
+  return VIDEO_RE.test(path) || AUDIO_RE.test(path);
+}
+
+function mediaHasVideo(m: Pick<MediaInfo, "width" | "height" | "videoCodec">) {
+  return (m.width ?? 0) > 8 && (m.height ?? 0) > 8;
+}
 
 export type DropGhost = {
   path: string;
@@ -41,11 +58,84 @@ export type DropGhost = {
   duration: number;
   start: number;
   hasAudio: boolean;
+  audioOnly: boolean;
   probing: boolean;
 };
 
+export type ExportOpts = {
+  profile?: "quick" | "discord" | "youtube" | "manual";
+  encoder?: string;
+  crf?: number;
+  preset?: string;
+  audioBitrate?: string;
+  width?: number;
+  height?: number;
+  outputPath?: string;
+};
+
+function scaleToMaxH(w: number, h: number, maxH: number) {
+  if (h <= maxH) return { w: evenPx(w), h: evenPx(h) };
+  return { w: evenPx(Math.round((w * maxH) / h)), h: evenPx(maxH) };
+}
+
+const thumbBusy = new Set<string>();
+const keyBusy = new Set<string>();
+
+function startJob(get: () => EditorState, set: (s: Partial<EditorState>) => void, id: string, label: string) {
+  set({ bgJobs: { ...get().bgJobs, [id]: label } });
+}
+
+function endJob(get: () => EditorState, set: (s: Partial<EditorState>) => void, id: string) {
+  const next = { ...get().bgJobs };
+  delete next[id];
+  set({ bgJobs: next });
+}
+
+function fillKeyframes(get: () => EditorState, set: (s: Partial<EditorState>) => void, path: string) {
+  if (!path || keyBusy.has(path)) return;
+  keyBusy.add(path);
+  startJob(get, set, `kf:${path}`, "keyframes");
+  void invoke<number[]>("probe_keyframes", { path })
+    .then((times) => {
+      const prev = get().mediaByPath[path];
+      if (!prev) return;
+      const next = { ...prev, keyframeTimes: times };
+      set({
+        mediaByPath: { ...get().mediaByPath, [path]: next },
+        media: get().media?.path === path ? next : get().media,
+      });
+    })
+    .catch(() => {})
+    .finally(() => {
+      keyBusy.delete(path);
+      endJob(get, set, `kf:${path}`);
+    });
+}
+
 function fileName(path: string) {
   return path.split(/[/\\]/).pop() ?? path;
+}
+
+const PREVIEW_NATIVE = /\.(mp4|m4v|webm|mov)$/i;
+
+async function previewUrlsFor(path: string, videoCodec?: string | null) {
+  if (PREVIEW_NATIVE.test(path)) {
+    const u = convertFileSrc(path);
+    return { video: u, audio: u };
+  }
+  try {
+    const proxy = await invoke<{ video: string; audio: string | null }>("make_proxy", {
+      path,
+      videoCodec: videoCodec ?? null,
+    });
+    return {
+      video: convertFileSrc(proxy.video),
+      audio: proxy.audio ? convertFileSrc(proxy.audio) : convertFileSrc(path),
+    };
+  } catch {
+    const u = convertFileSrc(path);
+    return { video: u, audio: u };
+  }
 }
 
 type EditorState = {
@@ -54,14 +144,18 @@ type EditorState = {
   playhead: number;
   selectedId: string | null;
   status: string;
+  bgJobs: Record<string, string>;
   busy: boolean;
   previewUrl: string | null;
   overlayUrl: string | null;
   overlayPeaks: number[];
   overlayMedia: MediaInfo | null;
   peaksByPath: Record<string, number[]>;
+  thumbsByPath: Record<string, Record<string, string>>;
+  ensureThumbs: (path: string, times: number[]) => void;
   mediaByPath: Record<string, MediaInfo>;
   previewByPath: Record<string, string>;
+  audioPreviewByPath: Record<string, string>;
   dropGhost: DropGhost | null;
   previewOver: boolean;
   showBlack: boolean;
@@ -73,19 +167,33 @@ type EditorState = {
   zoom: number;
   viewStart: number;
   range: (TimeRange & { kind: ClipKind }) | null;
+  clipSel: ClipSpan[];
+  setClipSel: (spans: ClipSpan[]) => void;
+  selLane: ClipKind | null;
+  setSelLane: (k: ClipKind | null) => void;
+  gainDraft: number;
+  setGainDraft: (db: number) => void;
+  commitGainDraft: () => void;
+  cancelGainDraft: () => void;
   clipboard: ClipboardChunk | null;
   playing: boolean;
   menuOpen: boolean;
   progress: { label: string; pct: number } | null;
+  collapseBlank: boolean;
+  setCollapseBlank: (v: boolean) => void;
+  cancelWork: () => void;
   previewVolume: number;
   openPath: (path: string) => Promise<void>;
   dropFile: (path: string, at?: number) => Promise<void>;
   addOverlay: (path: string, at?: number) => Promise<void>;
+  addAudio: (path: string, at?: number) => Promise<void>;
   hoverDrop: (path: string, start: number) => void;
   clearDropGhost: () => void;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
   setPlayhead: (t: number) => number | null;
+  scrubPreview: number | null;
+  setScrubPreview: (t: number | null) => void;
   slice: (at?: number, clipId?: string) => void;
   del: () => void;
   undo: () => void;
@@ -93,9 +201,12 @@ type EditorState = {
   select: (id: string | null) => void;
   liveTrim: (id: string, edge: "left" | "right", sourceEdge: number, snapSec?: number, from?: Clip[]) => void;
   liveMove: (id: string, timelineStart: number, snapSec?: number, from?: Clip[]) => void;
+  liveMoveSel: (id: string, origStart: number, proposedStart: number, snapSec: number, from: Clip[], seedIds: string[]) => void;
   commit: (before: Clip[], label: string) => void;
+  applyEdit: (clips: Clip[], label: string) => void;
   snapshot: () => Clip[] | null;
   toggleLink: (id: string) => void;
+  linkPair: (aId: string, bId: string) => void;
   setRange: (r: (TimeRange & { kind: ClipKind }) | null) => void;
   copyRange: () => void;
   liftRange: () => void;
@@ -118,7 +229,22 @@ type EditorState = {
   editingTextId: string | null;
   colorPickId: string | null;
   setColorPick: (id: string | null) => void;
-  exportVideo: () => Promise<void>;
+  selectedEffectId: string | null;
+  selectEffect: (clipId: string, effectId: string) => void;
+  addEffect: (kind: ClipEffectKind) => void;
+  setEffectAmount: (effectId: string, amount: number) => void;
+  saveProject: () => void;
+  exportVideo: (opts?: ExportOpts) => Promise<void>;
+  burnSubs: boolean;
+  burnSubIndex: number;
+  subCues: SubCue[];
+  subStyle: SubStyle;
+  setBurnSubs: (on: boolean) => void;
+  setBurnSubIndex: (index: number) => void;
+  setSubStyle: (patch: Partial<SubStyle>) => void;
+  exportCodecs: { id: string; label: string }[];
+  exportCodecsReady: boolean;
+  primeExportCodecs: () => void;
 };
 
 function syncHist(s: Partial<EditorState>): Partial<EditorState> {
@@ -134,8 +260,9 @@ function syncHist(s: Partial<EditorState>): Partial<EditorState> {
 function applyClips(get: () => EditorState, set: (s: Partial<EditorState>) => void, clips: Clip[], label: string) {
   const p = get().project;
   if (!p) return;
-  history.push(p.clips, clips, label);
-  set(syncHist({ project: { ...p, clips }, status: label }));
+  const next = get().collapseBlank ? collapseBlank(clips) : clips;
+  history.push(p.clips, next, label);
+  set(syncHist({ project: { ...p, clips: next }, status: label }));
 }
 
 export const useEditor = create<EditorState>((set, get) => ({
@@ -152,7 +279,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   peaksByPath: {},
   mediaByPath: {},
   previewByPath: {},
+  audioPreviewByPath: {},
   dropGhost: null,
+  scrubPreview: null,
+  setScrubPreview: (t) => set({ scrubPreview: t }),
   previewOver: false,
   showBlack: false,
   canUndo: false,
@@ -163,6 +293,49 @@ export const useEditor = create<EditorState>((set, get) => ({
   zoom: 80,
   viewStart: 0,
   range: null,
+  clipSel: [],
+  selLane: null,
+  setSelLane: (k) => set({ selLane: k }),
+  gainDraft: 0,
+  setGainDraft: (db) => {
+    set({ gainDraft: Math.max(-24, Math.min(18, db)) });
+    void import("../lib/playbackClock").then(async (m) => {
+      await m.ensureAudioGraph();
+      m.applyPreviewVolume(get().previewVolume);
+    });
+  },
+  commitGainDraft: () => {
+    const p = get().project;
+    const draft = get().gainDraft;
+    const close = { gainDraft: 0, clipSel: [] as ClipSpan[], selLane: null as ClipKind | null, range: null };
+    if (!p || Math.abs(draft) < 0.05) {
+      set(close);
+      return;
+    }
+    const spans = get().clipSel.filter((s) => p.clips.find((c) => c.id === s.clipId)?.kind === "audio");
+    if (!spans.length) {
+      set(close);
+      return;
+    }
+    const clips = p.clips.map((c) => {
+      const hit = spans.filter((s) => s.clipId === c.id);
+      if (!hit.length) return c;
+      let next = c.gainSpans;
+      for (const s of hit) {
+        const a = c.sourceStart + (s.start - c.timelineStart);
+        const b = c.sourceStart + (s.end - c.timelineStart);
+        next = addGainRegion(next, a, b, draft);
+      }
+      return { ...c, gainSpans: next };
+    });
+    applyClips(get, set, clips, "Audio gain");
+    set(close);
+    void import("../lib/playbackClock").then((m) => m.applyPreviewVolume(get().previewVolume));
+  },
+  cancelGainDraft: () => {
+    set({ gainDraft: 0, clipSel: [], selLane: null, range: null });
+    void import("../lib/playbackClock").then((m) => m.applyPreviewVolume(get().previewVolume));
+  },
   clipboard: null,
   playing: false,
   menuOpen: false,
@@ -171,6 +344,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   editingTextId: null,
   colorPickId: null,
   setColorPick: (id) => set({ colorPickId: id }),
+  selectedEffectId: null,
 
   setPlaying: (v) => set({ playing: v }),
   togglePlay: () => {
@@ -188,6 +362,42 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
   setMenuOpen: (v) => set({ menuOpen: v }),
   setProgress: (p) => set({ progress: p, busy: p != null }),
+  collapseBlank: typeof localStorage !== "undefined" && localStorage.getItem("grimcut.collapseBlank") === "1",
+  setCollapseBlank: (v) => {
+    try {
+      localStorage.setItem("grimcut.collapseBlank", v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+    set({ collapseBlank: v });
+  },
+  cancelWork: () => {
+    void invoke("cancel_export").catch(() => {});
+    set({ busy: false, progress: null, status: "Cancelled." });
+  },
+  thumbsByPath: {},
+  bgJobs: {},
+  ensureThumbs: (path, times) => {
+    if (!path || !times.length) return;
+    const have = get().thumbsByPath[path] ?? {};
+    const uniq = [...new Set(times.map((t) => Math.round(t * 20) / 20))]
+      .filter((t) => t >= 0 && !have[t.toFixed(2)])
+      .slice(0, 24);
+    if (!uniq.length || thumbBusy.has(path)) return;
+    thumbBusy.add(path);
+    startJob(get, set, `thumbs:${path}`, "thumbnails");
+    void invoke<{ time: number; path: string }[]>("filmstrip_thumbs", { path, times: uniq })
+      .then((rows) => {
+        const next = { ...(get().thumbsByPath[path] ?? {}) };
+        for (const r of rows) next[(Math.round(r.time * 20) / 20).toFixed(2)] = r.path;
+        set({ thumbsByPath: { ...get().thumbsByPath, [path]: next } });
+      })
+      .catch(() => {})
+      .finally(() => {
+        thumbBusy.delete(path);
+        endJob(get, set, `thumbs:${path}`);
+      });
+  },
 
   openPath: async (path) => {
     set({ busy: true, progress: { label: "Reading media…", pct: 8 }, status: "Opening…" });
@@ -195,24 +405,9 @@ export const useEditor = create<EditorState>((set, get) => ({
       const media = await invoke<MediaInfo>("probe", { path });
       history.clear();
       const project = fromMedia(media);
-      set({ progress: { label: "Preparing preview…", pct: 40 } });
-      let previewUrl = convertFileSrc(path);
-      if (!/\.(mp4|m4v|webm|mov)$/i.test(path)) {
-        try {
-          previewUrl = convertFileSrc(await invoke<string>("make_proxy", { path }));
-        } catch {
-          /* native */
-        }
-      }
-      let peaks: number[] = [];
-      if (media.hasAudio) {
-        set({ progress: { label: "Building waveform…", pct: 65 } });
-        try {
-          peaks = await invoke<number[]>("waveform", { path });
-        } catch {
-          peaks = [];
-        }
-      }
+      set({ progress: { label: PREVIEW_NATIVE.test(path) ? "Preparing preview…" : "Remuxing preview (copy, not re-encode)…", pct: 40 } });
+      const urls = await previewUrlsFor(path, media.videoCodec);
+      const previewUrl = urls.video;
       set(
         syncHist({
           project,
@@ -223,23 +418,44 @@ export const useEditor = create<EditorState>((set, get) => ({
           overlayUrl: null,
           overlayPeaks: [],
           overlayMedia: null,
-          peaksByPath: media.hasAudio ? { [path]: peaks } : {},
+          peaksByPath: {},
           mediaByPath: { [path]: media },
-          previewByPath: { [path]: previewUrl },
+          previewByPath: { [path]: urls.video },
+          audioPreviewByPath: { [path]: urls.audio },
           dropGhost: null,
           previewOver: false,
           showBlack: false,
           busy: false,
           progress: null,
-          peaks,
+          peaks: [],
+          thumbsByPath: { ...get().thumbsByPath },
           zoom: 1,
           viewStart: 0,
           range: null,
           clipboard: null,
           playing: false,
-          status: `${path.split(/[/\\]/).pop()} — ${formatTime(media.duration)}`,
+          burnSubs: false,
+          burnSubIndex: textSubtitleTracks(media)[0]?.index ?? -1,
+          subCues: [],
+          status: (() => {
+            const n = textSubtitleTracks(media).length;
+            const name = path.split(/[/\\]/).pop();
+            const t = formatTime(media.duration);
+            return n ? `${name} — ${t} · ${n} subtitle${n === 1 ? "" : "s"} (CC to burn on export)` : `${name} — ${t}`;
+          })(),
         }),
       );
+      fillKeyframes(get, set, path);
+      if (media.hasAudio) {
+        startJob(get, set, `wave:${path}`, "waveform");
+        void invoke<number[]>("waveform", { path })
+          .then((peaks) => {
+            if (get().project?.sourcePath !== path) return;
+            set({ peaks, peaksByPath: { ...get().peaksByPath, [path]: peaks } });
+          })
+          .catch(() => {})
+          .finally(() => endJob(get, set, `wave:${path}`));
+      }
       if (media.width && media.height) {
         requestAnimationFrame(() => {
           void fitWindowToVideo(media.width!, media.height!);
@@ -253,24 +469,57 @@ export const useEditor = create<EditorState>((set, get) => ({
   pickOpen: async () => {
     const path = await open({
       multiple: false,
-      filters: [{ name: "Video", extensions: ["mp4", "mkv", "mov", "avi", "webm", "m4v", "wmv"] }],
+      filters: [
+        { name: "Media", extensions: ["mp4", "mkv", "mov", "avi", "webm", "m4v", "wmv", "mp3", "wav", "flac", "aac", "m4a", "ogg", "opus"] },
+        { name: "Video", extensions: ["mp4", "mkv", "mov", "avi", "webm", "m4v", "wmv"] },
+        { name: "Audio", extensions: ["mp3", "wav", "flac", "aac", "m4a", "ogg", "opus", "wma", "aiff"] },
+      ],
     });
-    if (typeof path === "string") await get().openPath(path);
+    if (typeof path !== "string") return;
+    if (AUDIO_RE.test(path) && get().project) {
+      await get().addAudio(path);
+      return;
+    }
+    if (AUDIO_RE.test(path) && !get().project) {
+      set({ status: "Open a video first, then drop or open audio." });
+      return;
+    }
+    await get().openPath(path);
   },
 
   dropFile: async (path, at) => {
-    if (!VIDEO_RE.test(path)) {
-      set({ status: "Drop a video file.", dropGhost: null });
+    if (!isMediaPath(path)) {
+      set({ status: "Drop a video or audio file.", dropGhost: null });
       return;
     }
     const start = at ?? get().dropGhost?.start ?? get().playhead;
     set({ dropGhost: null });
-    if (get().project) await get().addOverlay(path, start);
-    else await get().openPath(path);
+    if (!get().project) {
+      if (AUDIO_RE.test(path)) {
+        set({ status: "Open a video first, then drop audio." });
+        return;
+      }
+      await get().openPath(path);
+      return;
+    }
+    let media = get().mediaByPath[path];
+    try {
+      if (!media) media = await invoke<MediaInfo>("probe", { path });
+    } catch {
+      if (AUDIO_RE.test(path)) {
+        await get().addAudio(path, start);
+        return;
+      }
+      await get().addOverlay(path, start);
+      return;
+    }
+    if (mediaHasVideo(media)) await get().addOverlay(path, start);
+    else if (media.hasAudio) await get().addAudio(path, start);
+    else set({ status: "No video or audio in that file." });
   },
 
   hoverDrop: (path, start) => {
-    if (!get().project || !VIDEO_RE.test(path)) return;
+    if (!get().project || !isMediaPath(path)) return;
     const t = Math.max(0, start);
     const prev = get().dropGhost;
     const name = fileName(path);
@@ -278,8 +527,8 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (prev?.path === path) {
       if (Math.abs(prev.start - t) < 0.008 && !prev.probing) return;
       set({
-        dropGhost: { ...prev, start: t },
-        status: `Overlay ${name} · ${formatTime(prev.duration || 0)} at ${formatTime(t)}`,
+        dropGhost: { ...prev, start: t, audioOnly: prev.audioOnly },
+        status: `${prev.audioOnly ? "Audio" : "Overlay"} ${name} · ${formatTime(prev.duration || 0)} at ${formatTime(t)}`,
       });
       return;
     }
@@ -289,22 +538,40 @@ export const useEditor = create<EditorState>((set, get) => ({
         name,
         duration: cached?.duration ?? 0,
         start: t,
-        hasAudio: cached?.hasAudio ?? true,
+        hasAudio: cached?.hasAudio ?? !AUDIO_RE.test(path),
+        audioOnly: cached ? !mediaHasVideo(cached) && !!cached.hasAudio : AUDIO_RE.test(path),
         probing: !cached,
       },
-      status: cached ? `Overlay ${name} · ${formatTime(cached.duration)} at ${formatTime(t)}` : `Reading ${name}…`,
+      status: cached
+        ? `${!mediaHasVideo(cached) && cached.hasAudio ? "Audio" : "Overlay"} ${name} · ${formatTime(cached.duration)} at ${formatTime(t)}`
+        : `Reading ${name}…`,
     });
     if (cached) return;
     void (async () => {
       try {
+        const dur = await invoke<number>("probe_quick", { path });
+        const g0 = get().dropGhost;
+        if (g0?.path === path && Number.isFinite(dur) && dur > 0) {
+          set({
+            dropGhost: { ...g0, duration: dur },
+            status: `Overlay ${name} · ${formatTime(dur)} at ${formatTime(g0.start)}`,
+          });
+        }
         const media = await invoke<MediaInfo>("probe", { path });
         const g = get().dropGhost;
         if (!g || g.path !== path) return;
         set({
           mediaByPath: { ...get().mediaByPath, [path]: media },
-          dropGhost: { ...g, duration: media.duration, hasAudio: media.hasAudio, probing: false },
+          dropGhost: {
+            ...g,
+            duration: media.duration,
+            hasAudio: media.hasAudio,
+            audioOnly: !mediaHasVideo(media) && media.hasAudio,
+            probing: false,
+          },
           status: `Overlay ${name} · ${formatTime(media.duration)} at ${formatTime(g.start)}`,
         });
+        fillKeyframes(get, set, path);
       } catch {
         const g = get().dropGhost;
         if (g?.path === path) set({ dropGhost: { ...g, probing: false }, status: `Couldn’t read ${name}` });
@@ -314,6 +581,53 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   clearDropGhost: () => {
     if (get().dropGhost) set({ dropGhost: null });
+  },
+
+  addAudio: async (path, at) => {
+    const p = get().project;
+    if (!p) {
+      set({ status: "Open a video first, then drop audio." });
+      return;
+    }
+    const start = Math.max(0, at ?? get().dropGhost?.start ?? get().playhead);
+    set({ busy: true, progress: { label: "Importing audio…", pct: 12 }, dropGhost: null, status: "Adding audio…" });
+    try {
+      let media = get().mediaByPath[path];
+      if (!media) media = await invoke<MediaInfo>("probe", { path });
+      const r = tryAddAudioFromMedia(get().project!, media, start);
+      if (!r.ok) {
+        set({ busy: false, progress: null, status: r.error });
+        return;
+      }
+      let peaks = get().peaksByPath[path] ?? [];
+      if (media.hasAudio && peaks.length === 0) {
+        set({ progress: { label: "Audio waveform…", pct: 55 } });
+        try {
+          peaks = await invoke<number[]>("waveform", { path });
+        } catch {
+          peaks = [];
+        }
+      }
+      const audioClips = r.clips.filter((c) => c.kind === "audio");
+      const placed =
+        audioClips.find((c) => c.sourcePath === (path !== p.sourcePath ? path : undefined)) ??
+        audioClips[audioClips.length - 1];
+      applyClips(get, set, r.clips, "Add audio");
+      set({
+        peaksByPath: { ...get().peaksByPath, [path]: peaks },
+        mediaByPath: { ...get().mediaByPath, [path]: media },
+        previewByPath: { ...get().previewByPath, [path]: convertFileSrc(path) },
+        audioPreviewByPath: { ...get().audioPreviewByPath, [path]: convertFileSrc(path) },
+        selectedId: placed?.id ?? get().selectedId,
+        busy: false,
+        progress: null,
+        dropGhost: null,
+        status: `Audio: ${fileName(path)} at ${formatTime(start)}`,
+      });
+      fillKeyframes(get, set, path);
+    } catch (e) {
+      set({ busy: false, progress: null, dropGhost: null, status: String(e) });
+    }
   },
 
   addOverlay: async (path, at) => {
@@ -333,22 +647,15 @@ export const useEditor = create<EditorState>((set, get) => ({
         return;
       }
       let overlayUrl = get().previewByPath[path] ?? convertFileSrc(path);
-      if (!get().previewByPath[path] && !/\.(mp4|m4v|webm|mov)$/i.test(path)) {
-        try {
-          overlayUrl = convertFileSrc(await invoke<string>("make_proxy", { path }));
-        } catch {
-          /* native */
-        }
+      if (!get().previewByPath[path]) {
+        const urls = await previewUrlsFor(path, media.videoCodec);
+        overlayUrl = urls.video;
+        set({
+          previewByPath: { ...get().previewByPath, [path]: urls.video },
+          audioPreviewByPath: { ...get().audioPreviewByPath, [path]: urls.audio },
+        });
       }
-      let overlayPeaks = get().peaksByPath[path] ?? [];
-      if (media.hasAudio && overlayPeaks.length === 0) {
-        set({ progress: { label: "Overlay waveform…", pct: 55 } });
-        try {
-          overlayPeaks = await invoke<number[]>("waveform", { path });
-        } catch {
-          overlayPeaks = [];
-        }
-      }
+      const overlayPeaks = get().peaksByPath[path] ?? [];
       const over = [...r.clips].reverse().find((c) => c.layer === "over" && c.kind === "video");
       applyClips(get, set, r.clips, "Overlay (2nd layer)");
       set({
@@ -358,18 +665,40 @@ export const useEditor = create<EditorState>((set, get) => ({
         peaksByPath: { ...get().peaksByPath, [path]: overlayPeaks },
         mediaByPath: { ...get().mediaByPath, [path]: media },
         previewByPath: { ...get().previewByPath, [path]: overlayUrl },
+        audioPreviewByPath: {
+          ...get().audioPreviewByPath,
+          [path]: get().audioPreviewByPath[path] ?? overlayUrl,
+        },
         selectedId: over?.id ?? get().selectedId,
         busy: false,
         progress: null,
         dropGhost: null,
         status: `Overlay: ${fileName(path)} at ${formatTime(start)}`,
       });
+      fillKeyframes(get, set, path);
+      if (media.hasAudio && overlayPeaks.length === 0) {
+        startJob(get, set, `wave:${path}`, "waveform");
+        void invoke<number[]>("waveform", { path })
+          .then((peaks) => {
+            if (!get().mediaByPath[path]) return;
+            set({
+              overlayPeaks: peaks,
+              peaksByPath: { ...get().peaksByPath, [path]: peaks },
+            });
+          })
+          .catch(() => {})
+          .finally(() => endJob(get, set, `wave:${path}`));
+      }
     } catch (e) {
       set({ busy: false, progress: null, dropGhost: null, status: String(e) });
     }
   },
 
   closeProject: () => {
+    set({ playing: false });
+    soundUnload();
+    void import("../lib/playbackClock").then((m) => m.haltPlayback());
+    void invoke("drop_preview_cache").catch(() => {});
     history.clear();
     set(
       syncHist({
@@ -377,6 +706,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         media: null,
         playhead: 0,
         selectedId: null,
+        selectedEffectId: null,
         previewUrl: null,
         overlayUrl: null,
         overlayPeaks: [],
@@ -384,14 +714,21 @@ export const useEditor = create<EditorState>((set, get) => ({
         peaksByPath: {},
         mediaByPath: {},
         previewByPath: {},
+        audioPreviewByPath: {},
         dropGhost: null,
+        scrubPreview: null,
         previewOver: false,
         showBlack: false,
         peaks: [],
         range: null,
+        clipSel: [],
         playing: false,
         progress: null,
         status: "Drop a video or File → Open…",
+        burnSubs: false,
+        burnSubIndex: -1,
+        subCues: [],
+        subStyle: { ...DEFAULT_SUB_STYLE },
       }),
     );
   },
@@ -431,6 +768,31 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   del: () => {
+    const spans = get().clipSel;
+    if (spans.length) {
+      const p = get().project;
+      if (!p) return;
+      const r = tryDeleteSpans(p, spans);
+      if (!r.ok) {
+        set({ status: r.error });
+        return;
+      }
+      applyClips(get, set, r.clips, "Delete selection");
+      set({ clipSel: [], range: null });
+      return;
+    }
+    const fxId = get().selectedEffectId;
+    if (fxId) {
+      const p = get().project;
+      if (!p) return;
+      const clips = p.clips.map((c) => {
+        if (!c.effects?.some((e) => e.id === fxId)) return c;
+        return { ...c, effects: (c.effects ?? []).filter((e) => e.id !== fxId) };
+      });
+      applyClips(get, set, clips, "Remove effect");
+      set({ selectedEffectId: null });
+      return;
+    }
     const span = get().range;
     if (span && Math.abs(span.end - span.start) > 0.04) {
       get().liftRange();
@@ -465,7 +827,62 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({
       selectedId: id,
       editingTextId: id && id === get().editingTextId ? get().editingTextId : null,
+      selectedEffectId: null,
     }),
+
+  selectEffect: (clipId, effectId) =>
+    set({
+      selectedId: clipId,
+      selectedEffectId: effectId,
+      editingTextId: null,
+    }),
+
+  addEffect: (kind) => {
+    const p = get().project;
+    if (!p) return;
+    let clip = p.clips.find((c) => c.id === get().selectedId);
+    if (!clip || clip.kind === "audio") {
+      clip = p.clips.find(
+        (c) =>
+          (c.kind === "video" || c.kind === "text") &&
+          get().playhead >= c.timelineStart &&
+          get().playhead < c.timelineStart + (c.sourceEnd - c.sourceStart),
+      );
+    }
+    if (!clip || clip.kind === "audio") {
+      set({ status: "Select a video or text clip to add an effect" });
+      return;
+    }
+    const existing = clip.effects?.find((e) => e.kind === kind);
+    if (existing) {
+      set({
+        selectedId: clip.id,
+        selectedEffectId: existing.id,
+        editingTextId: null,
+        status: "Blur selected",
+      });
+      return;
+    }
+    const fx: ClipEffect = { id: newId(), kind, amount: 8 };
+    const clips = p.clips.map((c) => (c.id === clip!.id ? { ...c, effects: [...(c.effects ?? []), fx] } : c));
+    applyClips(get, set, clips, "Gaussian blur");
+    set({ selectedId: clip.id, selectedEffectId: fx.id, editingTextId: null });
+  },
+
+  setEffectAmount: (effectId, amount) => {
+    const p = get().project;
+    if (!p) return;
+    const n = Math.max(0, Math.min(100, amount));
+    set({
+      project: {
+        ...p,
+        clips: p.clips.map((c) => ({
+          ...c,
+          effects: c.effects?.map((e) => (e.id === effectId ? { ...e, amount: n } : e)),
+        })),
+      },
+    });
+  },
 
   liveTrim: (id, edge, sourceEdge, snapSec = 0.12, from) => {
     const p = get().project;
@@ -517,12 +934,35 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (r.ok) set({ project: { ...p, clips: r.clips } });
   },
 
+  liveMoveSel: (id, origStart, proposedStart, snapSec, from, seedIds) => {
+    const p = get().project;
+    if (!p) return;
+    const src = { ...p, clips: from };
+    const clip = src.clips.find((c) => c.id === id);
+    if (!clip) return;
+    let delta = proposedStart - origStart;
+    const snapped = snapStart(src, clip, clip.timelineStart + delta, snapSec);
+    delta = snapped - clip.timelineStart;
+    const r = tryMoveIds(src, new Set(seedIds), delta);
+    if (!r.ok) return;
+    const sel = seedIds
+      .map((cid) => {
+        const c = r.clips.find((x) => x.id === cid);
+        if (!c) return null;
+        return { clipId: c.id, start: c.timelineStart, end: c.timelineStart + (c.sourceEnd - c.sourceStart) };
+      })
+      .filter((x): x is ClipSpan => !!x);
+    set({ project: { ...p, clips: r.clips }, clipSel: sel });
+  },
+
   commit: (before, label) => {
     const p = get().project;
     if (!p) return;
     history.push(before, p.clips, label);
     set(syncHist({ status: `${label} · ${formatTime(timelineDuration(p))}` }));
   },
+
+  applyEdit: (clips, label) => applyClips(get, set, clips, label),
 
   snapshot: () => get().project?.clips.map((s) => ({ ...s })) ?? null,
 
@@ -537,7 +977,22 @@ export const useEditor = create<EditorState>((set, get) => ({
     applyClips(get, set, r.clips, r.clips.some((c) => c.id === id && c.linkGroup) ? "Link A/V" : "Unlink A/V");
   },
 
+  linkPair: (aId, bId) => {
+    const p = get().project;
+    if (!p) return;
+    const r = tryLinkPair(p, aId, bId);
+    if (!r.ok) {
+      set({ status: r.error });
+      return;
+    }
+    applyClips(get, set, r.clips, "Link A/V");
+  },
+
   setRange: (range) => set({ range }),
+  setClipSel: (spans) => {
+    const next = mergeSpans(spans);
+    set({ clipSel: next, gainDraft: 0, selLane: next.length ? get().selLane : null });
+  },
 
   copyRange: () => {
     const p = get().project;
@@ -568,9 +1023,50 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   cutOrSlice: () => {
+    const p = get().project;
+    if (!p) return;
+    const sel = get().clipSel;
+    if (sel.length) {
+      const c = p.clips.find((x) => x.id === sel[0].clipId);
+      const s = sel[0];
+      const chunk =
+        c && s
+          ? {
+              kind: c.kind,
+              sourceStart: c.sourceStart + (Math.max(s.start, c.timelineStart) - c.timelineStart),
+              sourceEnd: c.sourceStart + (Math.min(s.end, clipEnd(c)) - c.timelineStart),
+              sourcePath: c.sourcePath,
+              consume: true,
+            }
+          : null;
+      get().del();
+      if (chunk && chunk.sourceEnd - chunk.sourceStart > 0.04) {
+        set({ clipboard: chunk, status: `Cut ${formatTime(chunk.sourceEnd - chunk.sourceStart)} — paste to place` });
+      }
+      return;
+    }
     const range = get().range;
     if (range && Math.abs(range.end - range.start) > 0.04) {
       get().liftRange();
+      return;
+    }
+    const id = get().selectedId;
+    const c = p.clips.find((x) => x.id === id);
+    if (c) {
+      const chunk = {
+        kind: c.kind,
+        sourceStart: c.sourceStart,
+        sourceEnd: c.sourceEnd,
+        sourcePath: c.sourcePath,
+        consume: true,
+      };
+      const r = tryDelete(p, c.id);
+      if (!r.ok) {
+        set({ status: r.error });
+        return;
+      }
+      applyClips(get, set, r.clips, "Cut clip");
+      set({ clipboard: chunk, selectedId: null, status: "Cut clip — paste to place" });
       return;
     }
     get().slice();
@@ -733,41 +1229,163 @@ export const useEditor = create<EditorState>((set, get) => ({
     });
   },
 
-  exportVideo: async () => {
-    const { project, media, busy } = get();
+  burnSubs: false,
+  burnSubIndex: -1,
+  subCues: [],
+  subStyle: { ...DEFAULT_SUB_STYLE },
+  exportCodecs: [],
+  exportCodecsReady: false,
+  primeExportCodecs: () => {
+    if (get().exportCodecsReady) return;
+    void invoke<{ id: string; label: string }[]>("list_export_codecs")
+      .then((list) => set({ exportCodecs: list.length ? list : [{ id: "h264", label: "H.264" }], exportCodecsReady: true }))
+      .catch(() => set({ exportCodecs: [{ id: "h264", label: "H.264" }], exportCodecsReady: true }));
+  },
+  setSubStyle: (patch) => set({ subStyle: { ...get().subStyle, ...patch } }),
+  setBurnSubs: (on) => set({ burnSubs: on, subCues: on ? get().subCues : [] }),
+  setBurnSubIndex: (index) => {
+    set({ burnSubIndex: index, burnSubs: true });
+    const p = get().project;
+    const media = get().media;
+    if (!p || !media) return;
+    const track = textSubtitleTracks(media).find((s) => s.index === index);
+    if (!track) {
+      set({ subCues: [] });
+      return;
+    }
+    const src = p.sourcePath;
+    startJob(get, set, "subs", "subtitles");
+    void invoke<SubCue[]>("extract_subtitles", {
+      path: src,
+      stream: track.index >= 0 ? track.index : null,
+      sidecar: track.sidecar ?? null,
+    })
+      .then((cues) => {
+        if (get().project?.sourcePath !== src || get().burnSubIndex !== index) return;
+        set({ subCues: cues, status: cues.length ? `Subtitles: ${cues.length} cues` : "No subtitle cues in that track" });
+      })
+      .catch((e) => {
+        if (get().project?.sourcePath !== src) return;
+        set({ subCues: [], status: String(e) });
+      })
+      .finally(() => endJob(get, set, "subs"));
+  },
+
+  saveProject: () => {
+    if (!get().project) {
+      set({ status: "Nothing to save." });
+      return;
+    }
+    set({ status: "Project save coming later." });
+  },
+
+  exportVideo: async (opts) => {
+    const { project, media, busy, burnSubs, burnSubIndex, subStyle } = get();
     if (!project || !media || busy) return;
+    const profile = opts?.profile ?? "quick";
     const suggested = await invoke<string>("suggest_save", { path: project.sourcePath });
-    const dest = await save({
-      defaultPath: suggested,
-      filters: [{ name: "Video", extensions: [suggested.split(".").pop() ?? "mp4"] }],
-    });
+    const dest =
+      opts?.outputPath ||
+      (await save({
+        defaultPath: suggested.replace(/\.(webm|gif)$/i, ".mp4"),
+        filters: [
+          { name: "MP4", extensions: ["mp4"] },
+          { name: "MKV", extensions: ["mkv"] },
+        ],
+      }));
     if (!dest) return;
     const clips = flattenKind(project, "video");
-    const audioClips = flattenKind(project, "audio");
+    const audioClips = flattenKind(project, "audio", "base");
+    const audioOverlay = flattenKind(project, "audio", "over");
+    const hasAudioClips = project.clips.some((c) => c.kind === "audio");
+    const hasOverAudio = project.clips.some((c) => c.kind === "audio" && c.layer === "over");
     const videoClips = project.clips.filter((c) => c.kind === "video");
     const compSlices = flattenCanvas(project, media, get().mediaByPath);
-    const hasGap = clips.some((c) => c.gap) || audioClips.some((c) => c.gap);
-    const otherFile = clips.some((s) => !s.gap && s.sourcePath !== project.sourcePath);
+    const hasGap = clips.some((c) => c.gap) || audioClips.some((c) => c.gap) || audioOverlay.some((c) => c.gap);
+    const otherFile =
+      clips.some((s) => !s.gap && s.sourcePath !== project.sourcePath) ||
+      audioClips.some((s) => !s.gap && s.sourcePath && s.sourcePath !== project.sourcePath) ||
+      audioOverlay.some((s) => !s.gap && s.sourcePath && s.sourcePath !== project.sourcePath);
     const fancy =
       compSlices.some((s) => s.layers.length !== 1) ||
       videoClips.some((c) => {
         const xf = c.transform;
-        return xf && (xf.x !== 0 || xf.y !== 0 || xf.scale !== 1 || xf.rotation !== 0 || (xf.scaleX != null && xf.scaleX !== xf.scale) || (xf.scaleY != null && xf.scaleY !== xf.scale));
+        return (
+          clipBlur(c) > 0.05 ||
+          (xf &&
+            (xf.x !== 0 ||
+              xf.y !== 0 ||
+              xf.scale !== 1 ||
+              xf.rotation !== 0 ||
+              (xf.scaleX != null && xf.scaleX !== xf.scale) ||
+              (xf.scaleY != null && xf.scaleY !== xf.scale)))
+        );
       }) ||
+      project.clips.some((c) => clipBlur(c) > 0.05) ||
       project.canvasWidth !== (media.width || project.canvasWidth) ||
       project.canvasHeight !== (media.height || project.canvasHeight);
     const mediaOnly = (segs: typeof clips) =>
       segs.filter((s) => !s.gap).map((s) => ({ sourceStart: s.sourceStart, sourceEnd: s.sourceEnd }));
+    const subTrack = textSubtitleTracks(media).find((s) => s.index === burnSubIndex);
+    const willBurn = burnSubs && !!subTrack;
     const useStreamCopy =
+      profile === "quick" &&
+      !willBurn &&
       !hasGap &&
       !otherFile &&
       !fancy &&
+      hasAudioClips &&
+      !hasOverAudio &&
+      !project.clips.some(
+        (c) => c.kind === "audio" && (Math.abs(c.gainDb ?? 0) > 0.05 || (c.gainSpans && c.gainSpans.length > 0)),
+      ) &&
       canStreamCopyAllClips(videoClips, media.keyframeTimes, media.frameRate) &&
       mediaOnly(audioClips).length === mediaOnly(clips).length;
+    let outW = opts?.width ?? project.canvasWidth;
+    let outH = opts?.height ?? project.canvasHeight;
+    let videoBitrate: string | null = null;
+    let audioBitrate = opts?.audioBitrate ?? "192k";
+    let encoder = opts?.encoder ?? "auto";
+    let crf = opts?.crf ?? null;
+    let x264Preset = opts?.preset ?? null;
+    if (profile === "youtube") {
+      const fps = media.frameRate || 30;
+      const area = Math.max(1, outW * outH) / (1920 * 1080);
+      const base = fps > 40 ? 12 : 8;
+      const mbps = Math.min(50, Math.max(2.5, Math.round(base * area * 10) / 10));
+      videoBitrate = `${mbps}M`;
+      audioBitrate = "384k";
+      encoder = "auto";
+    } else if (profile === "discord") {
+      const dur = Math.max(timelineDuration(project), 0.5);
+      const limitBits = 10 * 1000 * 1000 * 8;
+      const audioBps = 128_000;
+      let vBits = Math.max(400_000, limitBits / dur - audioBps);
+      if (vBits < 700_000) {
+        const s = scaleToMaxH(outW, outH, 480);
+        outW = s.w;
+        outH = s.h;
+      } else if (vBits < 1_400_000) {
+        const s = scaleToMaxH(outW, outH, 720);
+        outW = s.w;
+        outH = s.h;
+      }
+      vBits = Math.min(vBits, 6_000_000);
+      videoBitrate = `${Math.round(vBits / 1000)}k`;
+      audioBitrate = "128k";
+    }
+    const label =
+      profile === "discord"
+        ? "Exporting for Discord…"
+        : profile === "youtube"
+          ? "Exporting for YouTube…"
+          : useStreamCopy
+            ? "Saving (stream copy)…"
+            : "Saving…";
     set({
       busy: true,
-      progress: { label: useStreamCopy ? "Saving (stream copy)…" : "Saving…", pct: 12 },
-      status: useStreamCopy ? "Exporting (stream copy)…" : "Exporting (re-encode)…",
+      progress: { label, pct: 12 },
+      status: label,
     });
     try {
       const result = await invoke<{ message: string; outputPath: string }>("export_video", {
@@ -776,19 +1394,38 @@ export const useEditor = create<EditorState>((set, get) => ({
           outputPath: dest,
           clips,
           audioClips,
-          hasAudio: media.hasAudio,
+          audioOverlay: hasOverAudio ? audioOverlay : [],
+          hasAudio: hasAudioClips,
           videoCodec: media.videoCodec,
           useStreamCopy,
-          width: project.canvasWidth,
-          height: project.canvasHeight,
+          width: outW,
+          height: outH,
           frameRate: media.frameRate,
           compSlices,
+          profile,
+          videoBitrate,
+          audioBitrate,
+          crf,
+          encoder: encoder === "auto" ? null : encoder,
+          x264Preset,
+          burnSubs: willBurn,
+          subtitleStream: willBurn && subTrack && subTrack.index >= 0 ? subTrack.index : null,
+          subtitleFile: willBurn ? (subTrack?.sidecar ?? null) : null,
+          subtitleFont: subStyle.fontFamily,
+          subtitleColor: subStyle.color,
+          subtitleSize: subStyle.fontSize,
+          subtitleShadow: subStyle.shadow,
+          subtitleStroke: subStyle.stroke,
         },
       });
       set({ busy: false, progress: null, status: `Saved: ${result.outputPath} · ${result.message}` });
     } catch (e) {
       const text = String(e).replace(/^Error:\s*/i, "");
       const short = text.split("\n").filter(Boolean).slice(-1)[0] ?? text;
+      if (/cancel/i.test(short)) {
+        set({ busy: false, progress: null, status: "Export cancelled." });
+        return;
+      }
       set({ busy: false, progress: null, status: `Export failed: ${short}` });
       try {
         await navigator.clipboard.writeText(text);

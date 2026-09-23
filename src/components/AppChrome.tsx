@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEditor } from "../store/editorStore";
+import { AboutDialog } from "./AboutDialog";
 
 async function winAction(kind: "minimize" | "toggleMaximize" | "close") {
   try {
@@ -24,20 +25,11 @@ export function AppChrome() {
   const hamburgerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const has = useEditor((s) => s.project != null);
-  const busy = useEditor((s) => s.busy);
   const pickOpen = useEditor((s) => s.pickOpen);
   const closeProject = useEditor((s) => s.closeProject);
-  const slice = useEditor((s) => s.slice);
-  const del = useEditor((s) => s.del);
-  const copyRange = useEditor((s) => s.copyRange);
-  const paste = useEditor((s) => s.paste);
-  const undo = useEditor((s) => s.undo);
-  const redo = useEditor((s) => s.redo);
-  const exportVideo = useEditor((s) => s.exportVideo);
-  const canUndo = useEditor((s) => s.canUndo);
-  const canRedo = useEditor((s) => s.canRedo);
-  const undoLabel = useEditor((s) => s.undoLabel);
-  const redoLabel = useEditor((s) => s.redoLabel);
+  const saveProject = useEditor((s) => s.saveProject);
+  const collapseBlank = useEditor((s) => s.collapseBlank);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -104,38 +96,31 @@ export function AppChrome() {
           <button type="button" className="menu-option" onClick={() => { setMenuOpen(false); void pickOpen(); }}>
             Open… <span className="menu-shortcut">Ctrl+O</span>
           </button>
-          <button type="button" className="menu-option" disabled={!has || busy} onClick={() => { setMenuOpen(false); void exportVideo(); }}>
-            Save edited video… <span className="menu-shortcut">Ctrl+S</span>
+          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); saveProject(); }}>
+            Save project
           </button>
           <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); closeProject(); }}>
             Close
           </button>
           <div className="menu-sep" />
-          <div className="menu-label">Edit</div>
-          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); slice(); }}>
-            Slice at playhead <span className="menu-shortcut">S</span>
-          </button>
-          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); del(); }}>
-            Delete clip <span className="menu-shortcut">Del</span>
-          </button>
-          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); useEditor.getState().cutOrSlice(); }}>
-            Cut range <span className="menu-shortcut">Ctrl+X</span>
-          </button>
-          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); copyRange(); }}>
-            Copy range <span className="menu-shortcut">Ctrl+C</span>
-          </button>
-          <button type="button" className="menu-option" disabled={!has} onClick={() => { setMenuOpen(false); paste(); }}>
-            Paste <span className="menu-shortcut">Ctrl+V</span>
-          </button>
-          <button type="button" className="menu-option" disabled={!canUndo} onClick={() => { setMenuOpen(false); undo(); }}>
-            {undoLabel} <span className="menu-shortcut">Ctrl+Z</span>
-          </button>
-          <button type="button" className="menu-option" disabled={!canRedo} onClick={() => { setMenuOpen(false); redo(); }}>
-            {redoLabel} <span className="menu-shortcut">Ctrl+Y</span>
+          <div className="menu-label">Options</div>
+          <button
+            type="button"
+            className="menu-option"
+            onClick={() => useEditor.getState().setCollapseBlank(!useEditor.getState().collapseBlank)}
+          >
+            {collapseBlank ? "✓ Collapse blank" : "Collapse blank"}
           </button>
           <div className="menu-sep" />
-          <button type="button" className="menu-option" onClick={() => { setMenuOpen(false); void winAction("close"); }}>
-            Exit
+          <button
+            type="button"
+            className="menu-option"
+            onClick={() => {
+              setMenuOpen(false);
+              setAboutOpen(true);
+            }}
+          >
+            About
           </button>
         </div>,
         document.body,
@@ -184,6 +169,7 @@ export function AppChrome() {
         </button>
       </div>
       {menu}
+      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </header>
   );
 }
