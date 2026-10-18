@@ -63,8 +63,7 @@ if (!setupName) fail(`No ${version} setup exe in ${nsisDir}.`);
 const sigPath = join(nsisDir, `${setupName}.sig`);
 if (!existsSync(sigPath)) fail(`Missing ${sigPath}. Was the build signed?`);
 
-// No CHANGELOG yet, so releases ship without notes. Edit them on GitHub if wanted.
-const notes = "";
+const notes = changelogNotes(version);
 const manifest = {
   version,
   notes,
@@ -103,6 +102,19 @@ function git(args) {
 
 function displayVersion(v) {
   return v.replace(/\.0$/, "");
+}
+
+/** The CHANGELOG section for this version, falling back to Unreleased. */
+function changelogNotes(v) {
+  const text = readFileSync(join(root, "CHANGELOG.md"), "utf8").replace(/\r\n/g, "\n");
+  for (const heading of [v, displayVersion(v), "Unreleased"]) {
+    const start = text.indexOf(`\n## ${heading}\n`);
+    if (start < 0) continue;
+    const bodyStart = start + `\n## ${heading}\n`.length;
+    const next = text.indexOf("\n## ", bodyStart);
+    return text.slice(bodyStart, next < 0 ? undefined : next).trim();
+  }
+  return "";
 }
 
 function fail(msg) {
