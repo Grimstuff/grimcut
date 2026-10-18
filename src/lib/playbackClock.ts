@@ -245,6 +245,8 @@ function assignSrc(el: HTMLMediaElement, path: string, url: string) {
   if (el.dataset.mediaPath === path && el.getAttribute("src")) return;
   el.dataset.mediaPath = path;
   el.src = url;
+  // A fresh load sits on frame 0; its first seek must not be throttled by the previous one.
+  el.dataset.lastSeek = "0";
 }
 
 function seekIfNeeded(el: HTMLMediaElement, srcTime: number, playing: boolean) {
