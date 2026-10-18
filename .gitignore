@@ -6,3 +6,14 @@ tools/ffmpeg/
 .vscode/
 *.log
 .DS_Store
+
+# Local work files (kept on disk, not shipped)
+logs/
+.grok/
+scripts/make-icon.ps1
+scripts/relaunch.cmd
+scripts/relaunch.ps1
+src-tauri/icons/app-icon-source.png
+src-tauri/icons/_ico256.png
+src-tauri/icons/64x64.png
+release/
