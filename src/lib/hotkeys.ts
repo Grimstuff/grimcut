@@ -57,6 +57,11 @@ function onKey(e: KeyboardEvent) {
     st.redo();
   }
   if (e.code === "Escape") {
+    if (st.selectedAnimId) {
+      e.preventDefault();
+      st.selectAnimKey(null, null);
+      return;
+    }
     if (st.clipSel.length) {
       e.preventDefault();
       st.cancelGainDraft();

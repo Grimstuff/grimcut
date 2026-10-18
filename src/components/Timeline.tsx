@@ -373,7 +373,7 @@ export function Timeline() {
   };
 
   const startBox = (kind: ClipKind, e: PointerEvent, clipId?: string) => {
-    if ((e.target as HTMLElement).closest(".handle, .clip-grip, .playhead-hit, .link-btn, .av-link")) return;
+    if ((e.target as HTMLElement).closest(".handle, .clip-grip, .playhead-hit, .link-btn, .av-link, .anim-key")) return;
     if (e.button === 1) {
       armDrag(e, { kind: "pan", startX: e.clientX, view0: scrollerEl?.scrollLeft ?? 0 });
       return;
@@ -520,6 +520,7 @@ export function Timeline() {
               </span>
             </div>
           ) : null}
+          {kind === "video" ? <MotionKeys clips={[...base, ...over]} pps={pps} /> : null}
         </div>
       </div>
     );
@@ -611,6 +612,65 @@ function HScroll({
     >
       <div className="tl-hscroll-thumb" style={{ width: `${thumbPct}%`, left: `${leftPct}%` }} />
     </div>
+  );
+}
+
+function MotionKeys({ clips, pps }: { clips: Clip[]; pps: number }) {
+  const selectedAnimId = useEditor((s) => s.selectedAnimId);
+  const marks = clips.filter((c) => c.kind !== "audio" && c.anim?.length);
+  if (!marks.length) return null;
+  return (
+    <>
+      {marks.map((clip) =>
+        [...(clip.anim ?? [])]
+          .sort((a, b) => a.t - b.t)
+          .map((k) => (
+            <button
+              key={k.id}
+              type="button"
+              className={`anim-key${selectedAnimId === k.id ? " is-on" : ""}${k.channels?.blend === false ? " is-step" : ""}`}
+              style={{ left: (clip.timelineStart + k.t) * pps, top: clip.layer === "over" ? 16 : 28 }}
+              title="Motion key — drag to move in time. Delete or right-click removes it."
+              onPointerDown={(e) => {
+                if (e.button === 1) return;
+                e.stopPropagation();
+                e.preventDefault();
+                if (e.button !== 0) return;
+                const st = useEditor.getState();
+                st.selectAnimKey(clip.id, k.id);
+                const startX = e.clientX;
+                const t0 = k.t;
+                const before = st.snapshot() ?? [];
+                let moved = false;
+                const move = (ev: globalThis.PointerEvent) => {
+                  const dx = ev.clientX - startX;
+                  if (Math.abs(dx) > 2) moved = true;
+                  const dur = clipDuration(clip);
+                  const nt = Math.max(0, Math.min(dur, t0 + dx / pps));
+                  useEditor.getState().moveAnimKey(clip.id, k.id, nt);
+                };
+                const up = () => {
+                  window.removeEventListener("pointermove", move);
+                  window.removeEventListener("pointerup", up);
+                  if (moved) useEditor.getState().commit(before, "Move motion key");
+                };
+                window.addEventListener("pointermove", move);
+                window.addEventListener("pointerup", up);
+              }}
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                useEditor.getState().removeAnimKey(clip.id, k.id);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                useEditor.getState().removeAnimKey(clip.id, k.id);
+              }}
+            />
+          )),
+      )}
+    </>
   );
 }
 

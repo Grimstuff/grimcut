@@ -14,7 +14,7 @@ Desktop app built with **Tauri 2 + React**, same family as [Grimpad](https://git
 ## Setup
 
 ```powershell
-cd C:\Users\Grimmers\Dev\grimcut
+cd C:\Users\Grimmers\Dev\grimsuite\grimcut
 npm install
 .\scripts\fetch-ffmpeg.ps1
 npm run tauri dev

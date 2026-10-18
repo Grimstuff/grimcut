@@ -608,6 +608,23 @@ html.is-live-resize body {
   overflow: visible;
 }
 
+.tb-motion-btn {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--gp-border);
+  border-radius: 4px;
+  background: var(--gp-surface);
+  color: var(--gp-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tb-motion-btn:hover {
+  background: var(--gp-tab-hover);
+}
+
 .tb-font {
   height: 28px;
   max-width: 130px;
@@ -1940,6 +1957,52 @@ html.is-live-resize body {
 
 .handle.left { left: 0; }
 .handle.right { right: 0; }
+
+.anim-key {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  margin-left: -6px;
+  padding: 0;
+  border: 1px solid #061018;
+  border-radius: 1px;
+  background: #7ee0ff;
+  transform: rotate(45deg);
+  cursor: ew-resize;
+  z-index: 10;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.anim-key::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.anim-key.is-on {
+  background: #fff;
+  box-shadow: 0 0 0 2px #7ee0ff;
+}
+
+.anim-key.is-step {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px #7ee0ff;
+}
+
+.anim-key.is-step.is-on {
+  background: #fff;
+  box-shadow: 0 0 0 2px #7ee0ff;
+}
+
+.tb-key {
+  font-size: 14px;
+  line-height: 1;
+  color: #7ee0ff;
+}
+
+.tb-key:disabled {
+  color: var(--gp-text-secondary);
+}
 
 .kf-tick {
   position: absolute;

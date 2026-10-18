@@ -1,4 +1,4 @@
-import type { Clip } from "./types";
+import { newId, type AnimKey, type Clip } from "./types";
 
 export type ClipTransform = {
   x: number;
@@ -119,6 +119,167 @@ export function evenPx(n: number, fallback = 2): number {
 
 export function clipXf(c: Clip): ClipTransform {
   return c.transform ? { ...c.transform } : defaultTransform();
+}
+
+function lerpN(a: number, b: number, u: number) {
+  return a + (b - a) * u;
+}
+
+function lerpAngle(a: number, b: number, u: number) {
+  let d = b - a;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  return a + d * u;
+}
+
+function poseNear(a: ClipTransform, b: ClipTransform) {
+  let d = a.rotation - b.rotation;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  return (
+    Math.hypot(a.x - b.x, a.y - b.y) < 0.8 &&
+    Math.abs(xfScaleX(a) - xfScaleX(b)) < 0.012 &&
+    Math.abs(xfScaleY(a) - xfScaleY(b)) < 0.012 &&
+    Math.abs(d) < 0.6
+  );
+}
+
+export function animOn(k: AnimKey, ch: "pan" | "rotate" | "scale" | "blend") {
+  return k.channels?.[ch] !== false;
+}
+
+/** A canvas drag names which parts it is allowed to change. The rest stay put. */
+export function writeTransform(
+  prev: ClipTransform,
+  next: ClipTransform,
+  write?: { pan?: boolean; rotate?: boolean; scale?: boolean },
+): ClipTransform {
+  if (!write) return { ...next, scaleX: next.scaleX ?? next.scale, scaleY: next.scaleY ?? next.scale };
+  return {
+    x: write.pan ? next.x : prev.x,
+    y: write.pan ? next.y : prev.y,
+    rotation: write.rotate ? next.rotation : prev.rotation,
+    scale: write.scale ? next.scale : prev.scale,
+    scaleX: write.scale ? (next.scaleX ?? next.scale) : (prev.scaleX ?? prev.scale),
+    scaleY: write.scale ? (next.scaleY ?? next.scale) : (prev.scaleY ?? prev.scale),
+  };
+}
+
+/** Keep channels the key has switched off when a canvas drag writes a new pose. */
+export function maskAnimWrite(prev: AnimKey | undefined, next: AnimKey): AnimKey {
+  if (!prev?.channels) return next;
+  const pan = animOn(prev, "pan");
+  const rotate = animOn(prev, "rotate");
+  const scale = animOn(prev, "scale");
+  return {
+    ...next,
+    x: pan ? next.x : prev.x,
+    y: pan ? next.y : prev.y,
+    rotation: rotate ? next.rotation : prev.rotation,
+    scale: scale ? next.scale : prev.scale,
+    scaleX: scale ? next.scaleX : prev.scaleX,
+    scaleY: scale ? next.scaleY : prev.scaleY,
+    channels: { ...prev.channels },
+  };
+}
+
+function channelValue<T>(
+  keys: AnimKey[],
+  t: number,
+  owns: (k: AnimKey) => boolean,
+  read: (k: AnimKey) => T,
+  lerp: (a: T, b: T, u: number) => T,
+  fallback: T,
+): T {
+  const owned = keys.filter(owns);
+  if (!owned.length) return fallback;
+  if (t <= owned[0].t) return read(owned[0]);
+  const last = owned[owned.length - 1];
+  if (t >= last.t) return read(last);
+  for (let i = 0; i < owned.length - 1; i++) {
+    const a = owned[i];
+    const b = owned[i + 1];
+    if (t < a.t || t > b.t) continue;
+    if (!animOn(b, "blend")) return read(a);
+    const u = (t - a.t) / Math.max(0.0001, b.t - a.t);
+    return lerp(read(a), read(b), u);
+  }
+  return read(last);
+}
+
+/** Pose at a timeline time. Keys are offsets from the clip start. A channel that is off is ignored. */
+export function poseAt(c: Clip, timelineT: number): ClipTransform {
+  const keys = [...(c.anim ?? [])].sort((a, b) => a.t - b.t);
+  if (!keys.length) return clipXf(c);
+  const t = timelineT - c.timelineStart;
+  const rest = clipXf(c);
+  const pos = channelValue(
+    keys,
+    t,
+    (k) => animOn(k, "pan"),
+    (k) => ({ x: k.x, y: k.y }),
+    (a, b, u) => ({ x: lerpN(a.x, b.x, u), y: lerpN(a.y, b.y, u) }),
+    { x: rest.x, y: rest.y },
+  );
+  const scl = channelValue(
+    keys,
+    t,
+    (k) => animOn(k, "scale"),
+    (k) => ({ scale: k.scale, scaleX: k.scaleX, scaleY: k.scaleY }),
+    (a, b, u) => ({
+      scale: lerpN(a.scale, b.scale, u),
+      scaleX: lerpN(a.scaleX, b.scaleX, u),
+      scaleY: lerpN(a.scaleY, b.scaleY, u),
+    }),
+    { scale: rest.scale, scaleX: rest.scaleX ?? rest.scale, scaleY: rest.scaleY ?? rest.scale },
+  );
+  const rotation = channelValue(
+    keys,
+    t,
+    (k) => animOn(k, "rotate"),
+    (k) => k.rotation,
+    lerpAngle,
+    rest.rotation,
+  );
+  return { x: pos.x, y: pos.y, scale: scl.scale, scaleX: scl.scaleX, scaleY: scl.scaleY, rotation };
+}
+
+/** Keys that survive a trim or slice, shifted so local 0 is `localFrom`. Samples the cut so the pose doesn't jump. */
+export function animRetimed(clip: Clip, localFrom: number, localTo: number): AnimKey[] | undefined {
+  const src = clip.anim;
+  if (!src?.length) return undefined;
+  const span = localTo - localFrom;
+  if (!(span > 0.02)) return undefined;
+  const sample = (local: number, t: number): AnimKey => {
+    const xf = poseAt(clip, clip.timelineStart + local);
+    return {
+      id: newId(),
+      t,
+      x: xf.x,
+      y: xf.y,
+      scale: xf.scale,
+      scaleX: xf.scaleX ?? xf.scale,
+      scaleY: xf.scaleY ?? xf.scale,
+      rotation: xf.rotation,
+    };
+  };
+  const kept = src
+    .filter((k) => k.t >= localFrom - 1e-3 && k.t <= localTo + 1e-3)
+    .map((k) => ({ ...k, t: Math.max(0, Math.min(span, k.t - localFrom)) }))
+    .sort((a, b) => a.t - b.t);
+  const want0 = poseAt(clip, clip.timelineStart + localFrom);
+  const want1 = poseAt(clip, clip.timelineStart + localTo);
+  const out: AnimKey[] = [];
+  const ghost: Clip = { ...clip, timelineStart: 0, anim: kept };
+  if (!kept.length || !poseNear(poseAt(ghost, 0), want0)) out.push(sample(localFrom, 0));
+  for (const k of kept) {
+    if (out.some((e) => Math.abs(e.t - k.t) < 0.03)) continue;
+    out.push(k);
+  }
+  const withKept: Clip = { ...clip, timelineStart: 0, anim: out };
+  if (!poseNear(poseAt(withKept, span), want1)) out.push(sample(localTo, span));
+  out.sort((a, b) => a.t - b.t);
+  return out.length ? out : undefined;
 }
 
 /** Native pixels of the clip, scaled so the whole frame fits the canvas at scale=1. */

@@ -12,6 +12,28 @@ export type ClipEffect = {
   /** Blur radius in px (preview CSS / ffmpeg sigma). */
   amount: number;
 };
+
+/** What a motion key owns. Omitted or true = on. */
+export type AnimChannels = {
+  pan?: boolean;
+  rotate?: boolean;
+  scale?: boolean;
+  /** false = hold the previous pose, then jump when this key is reached. */
+  blend?: boolean;
+};
+
+/** Motion key on a clip. Time is seconds from the clip's timeline start — not a GOP keyframe. */
+export type AnimKey = {
+  id: string;
+  t: number;
+  x: number;
+  y: number;
+  scale: number;
+  scaleX: number;
+  scaleY: number;
+  rotation: number;
+  channels?: AnimChannels;
+};
 /** Two-layer system: `base` is the main track, `over` is the single 2nd layer per kind. Overlay wins while it covers. */
 export type ClipLayer = "base" | "over";
 
@@ -42,6 +64,8 @@ export type Clip = {
   gainDb?: number;
   /** Extra loudness on source-time ranges; does not split the clip. */
   gainSpans?: { sourceStart: number; sourceEnd: number; db: number }[];
+  /** Position / scale / rotation over time. Empty = static transform. */
+  anim?: AnimKey[];
 };
 
 export type VideoProject = {
@@ -204,6 +228,7 @@ export function cloneClip(s: Clip): Clip {
     transform: s.transform ? { ...s.transform } : undefined,
     effects: s.effects?.map((e) => ({ ...e })),
     gainSpans: s.gainSpans?.map((g) => ({ ...g })),
+    anim: s.anim?.map((k) => ({ ...k })),
   };
 }
 

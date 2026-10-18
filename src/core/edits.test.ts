@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { poseAt, writeTransform } from "./canvas";
 import { fromMedia, flattenCanvas, flattenKind, mapTimelineToSource, snapStart, timelineDuration } from "./project";
 import { collectLaneSpans, extractSpans, tryAddOverlayFromMedia, tryAddText, tryDelete, tryLiftRange, tryLinkPair, tryMove, tryMoveIds, trySlice, tryToggleLink, tryTrim } from "./edits";
 import type { MediaInfo } from "./types";
@@ -286,6 +287,54 @@ describe("timeline model", () => {
     const m = moved.clips.find((c) => c.id === mid.id)!;
     expect(m.timelineStart).toBeCloseTo(3);
     expect(moved.clips.filter((c) => c.kind === "video").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("motion keys interpolate and survive a slice", () => {
+    const p = fromMedia(info);
+    const v = p.clips.find((c) => c.kind === "video")!;
+    v.anim = [
+      { id: "a", t: 0, x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 },
+      { id: "b", t: 4, x: 100, y: -20, scale: 2, scaleX: 2, scaleY: 2, rotation: 90 },
+    ];
+    expect(poseAt(v, 2).x).toBeCloseTo(50);
+    expect(poseAt(v, 2).rotation).toBeCloseTo(45);
+    const cut = trySlice(p, 2);
+    expect(cut.ok).toBe(true);
+    if (!cut.ok) return;
+    const left = cut.clips.find((c) => c.kind === "video" && c.timelineStart === 0)!;
+    const right = cut.clips.find((c) => c.kind === "video" && c.timelineStart > 1)!;
+    expect(poseAt(left, 2).x).toBeCloseTo(50, 0);
+    expect(poseAt(right, 2).x).toBeCloseTo(50, 0);
+    expect(poseAt(right, 4).x).toBeCloseTo(100, 0);
+    const trimmed = tryTrim({ ...p, clips: cut.clips }, left.id, "left", 1);
+    expect(trimmed.ok).toBe(true);
+    if (!trimmed.ok) return;
+    const shifted = trimmed.clips.find((c) => c.id === left.id)!;
+    expect(poseAt(shifted, shifted.timelineStart).x).toBeCloseTo(25, 0);
+  });
+
+  it("moving does not write the blended scale back onto a key", () => {
+    const prev = { x: 0, y: 0, scale: 0.4, scaleX: 0.4, scaleY: 0.4, rotation: 10 };
+    const blended = { x: 30, y: -8, scale: 0.9, scaleX: 0.9, scaleY: 0.9, rotation: 40 };
+    const out = writeTransform(prev, blended, { pan: true });
+    expect(out.x).toBe(30);
+    expect(out.y).toBe(-8);
+    expect(out.scale).toBe(0.4);
+    expect(out.rotation).toBe(10);
+  });
+
+  it("a motion key can drop a channel or hold instead of blending", () => {
+    const p = fromMedia(info);
+    const v = p.clips.find((c) => c.kind === "video")!;
+    v.transform = { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 };
+    v.anim = [
+      { id: "a", t: 0, x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 },
+      { id: "b", t: 4, x: 80, y: 0, scale: 1, scaleX: 1, scaleY: 1, rotation: 40, channels: { pan: false, blend: false } },
+    ];
+    expect(poseAt(v, 2).x).toBeCloseTo(0);
+    expect(poseAt(v, 2).rotation).toBeCloseTo(0);
+    expect(poseAt(v, 4).x).toBeCloseTo(0);
+    expect(poseAt(v, 4).rotation).toBeCloseTo(40);
   });
 
   it("flatten keeps timeline holes as gaps", () => {

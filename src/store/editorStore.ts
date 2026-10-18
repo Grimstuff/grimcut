@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { Clip, ClipEffect, ClipEffectKind, ClipKind, ClipboardChunk, ClipSpan, MediaInfo, SubCue, SubStyle, TimeRange, VideoProject } from "../core/types";
+import type { AnimChannels, AnimKey, Clip, ClipEffect, ClipEffectKind, ClipKind, ClipboardChunk, ClipSpan, MediaInfo, SubCue, SubStyle, TimeRange, VideoProject } from "../core/types";
 import { DEFAULT_SUB_STYLE, textSubtitleTracks } from "../core/types";
-import { addGainRegion, clipBlur, clipEnd, formatTime, newId } from "../core/types";
+import { addGainRegion, clipBlur, clipDuration, clipEnd, formatTime, newId } from "../core/types";
 import {
   clipAt,
   flattenCanvas,
@@ -16,7 +16,7 @@ import {
   snapStart,
   timelineDuration,
 } from "../core/project";
-import { AR_PRESETS, RES_BY_AR, evenPx, hugTextClip, type ClipTransform } from "../core/canvas";
+import { AR_PRESETS, RES_BY_AR, evenPx, hugTextClip, maskAnimWrite, poseAt, writeTransform, type ClipTransform } from "../core/canvas";
 import {
   UndoStack,
   chunkFromRange,
@@ -191,7 +191,7 @@ type EditorState = {
   clearDropGhost: () => void;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
-  setPlayhead: (t: number) => number | null;
+  setPlayhead: (t: number, opts?: { keepSelection?: boolean }) => number | null;
   scrubPreview: number | null;
   setScrubPreview: (t: number | null) => void;
   slice: (at?: number, clipId?: string) => void;
@@ -221,7 +221,13 @@ type EditorState = {
   setCanvas: (w: number, h: number) => void;
   setCanvasPreset: (id: string) => void;
   setPreviewVolume: (v: number) => void;
-  liveTransform: (id: string, xf: ClipTransform) => void;
+  liveTransform: (id: string, xf: ClipTransform, write?: { pan?: boolean; rotate?: boolean; scale?: boolean }) => void;
+  selectedAnimId: string | null;
+  addAnimKey: (id?: string) => void;
+  moveAnimKey: (clipId: string, keyId: string, t: number) => void;
+  removeAnimKey: (clipId: string, keyId: string) => void;
+  setAnimChannels: (clipId: string, keyId: string, patch: AnimChannels) => void;
+  selectAnimKey: (clipId: string | null, keyId: string | null) => void;
   addTextClip: () => void;
   setTextProps: (id: string, patch: Partial<Clip>, opts?: { hug?: boolean }) => void;
   hugText: (id: string) => void;
@@ -254,6 +260,40 @@ function syncHist(s: Partial<EditorState>): Partial<EditorState> {
     canRedo: history.canRedo,
     undoLabel: history.undoLabel,
     redoLabel: history.redoLabel,
+  };
+}
+
+function motionClipAt(clips: Clip[], playhead: number, selectedId: string | null): Clip | null {
+  const hit = clips.filter((c) => {
+    if (c.kind === "audio") return false;
+    return playhead >= c.timelineStart - 0.001 && playhead <= c.timelineStart + clipDuration(c) + 0.001;
+  });
+  return hit.find((c) => c.id === selectedId) ?? hit.find((c) => c.layer === "over") ?? hit[0] ?? null;
+}
+
+function nearestAnim(keys: AnimKey[] | undefined, t: number, within: number): AnimKey | undefined {
+  let best: AnimKey | undefined;
+  let bestD = within;
+  for (const k of keys ?? []) {
+    const d = Math.abs(k.t - t);
+    if (d < bestD) {
+      best = k;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+function animFromPose(id: string, t: number, xf: ClipTransform): AnimKey {
+  return {
+    id,
+    t,
+    x: xf.x,
+    y: xf.y,
+    scale: xf.scale,
+    scaleX: xf.scaleX ?? xf.scale,
+    scaleY: xf.scaleY ?? xf.scale,
+    rotation: xf.rotation,
   };
 }
 
@@ -733,7 +773,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     );
   },
 
-  setPlayhead: (t) => {
+  setPlayhead: (t, opts) => {
     const p = get().project;
     if (!p) return null;
     const max = rulerDuration(p);
@@ -742,7 +782,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const mapped = mapTimelineToSource(p, playhead);
     set({
       playhead,
-      selectedId: hit?.id ?? get().selectedId,
+      selectedId: opts?.keepSelection ? get().selectedId : (hit?.id ?? get().selectedId),
       showBlack: isTimelineGap(p, playhead),
     });
     return mapped?.source ?? null;
@@ -768,6 +808,16 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   del: () => {
+    const keyId = get().selectedAnimId;
+    if (keyId) {
+      const host = get().project?.clips.find((c) => c.anim?.some((k) => k.id === keyId));
+      const range = get().range;
+      const rangeOn = !!range && Math.abs(range.end - range.start) > 0.04;
+      if (host && !get().clipSel.length && !rangeOn) {
+        get().removeAnimKey(host.id, keyId);
+        return;
+      }
+    }
     const spans = get().clipSel;
     if (spans.length) {
       const p = get().project;
@@ -828,6 +878,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       selectedId: id,
       editingTextId: id && id === get().editingTextId ? get().editingTextId : null,
       selectedEffectId: null,
+      selectedAnimId: null,
     }),
 
   selectEffect: (clipId, effectId) =>
@@ -835,6 +886,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       selectedId: clipId,
       selectedEffectId: effectId,
       editingTextId: null,
+      selectedAnimId: null,
     }),
 
   addEffect: (kind) => {
@@ -1050,25 +1102,6 @@ export const useEditor = create<EditorState>((set, get) => ({
       get().liftRange();
       return;
     }
-    const id = get().selectedId;
-    const c = p.clips.find((x) => x.id === id);
-    if (c) {
-      const chunk = {
-        kind: c.kind,
-        sourceStart: c.sourceStart,
-        sourceEnd: c.sourceEnd,
-        sourcePath: c.sourcePath,
-        consume: true,
-      };
-      const r = tryDelete(p, c.id);
-      if (!r.ok) {
-        set({ status: r.error });
-        return;
-      }
-      applyClips(get, set, r.clips, "Cut clip");
-      set({ clipboard: chunk, selectedId: null, status: "Cut clip — paste to place" });
-      return;
-    }
     get().slice();
   },
 
@@ -1112,13 +1145,9 @@ export const useEditor = create<EditorState>((set, get) => ({
     applyClips(get, set, r.clips, "Paste");
     const added = r.clips.find((c) => !p.clips.some((old) => old.id === c.id));
     set({
-      clipboard: clip.consume ? null : get().clipboard,
+      clipboard: null,
       selectedId: added?.id ?? get().selectedId,
-      status: clip.consume
-        ? "Pasted cut clip"
-        : added?.layer === "over"
-          ? "Pasted on overlay (2nd layer)"
-          : "Pasted on base",
+      status: added?.layer === "over" ? "Pasted on overlay (2nd layer)" : "Pasted",
     });
   },
 
@@ -1161,13 +1190,102 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setPreviewVolume: (v) => set({ previewVolume: Math.max(0, Math.min(1, v)) }),
 
-  liveTransform: (id, xf) => {
+  selectedAnimId: null,
+  selectAnimKey: (clipId, keyId) =>
+    set({
+      selectedAnimId: keyId,
+      selectedId: clipId ?? get().selectedId,
+      selectedEffectId: keyId ? null : get().selectedEffectId,
+      ...(keyId ? { clipSel: [], range: null } : {}),
+    }),
+  addAnimKey: (id) => {
+    const p = get().project;
+    if (!p) return;
+    const c = id ? p.clips.find((x) => x.id === id) : motionClipAt(p.clips, get().playhead, get().selectedId);
+    if (!c || c.kind === "audio") {
+      set({ status: "Park the playhead on a video or text clip" });
+      return;
+    }
+    const local = get().playhead - c.timelineStart;
+    if (local < -0.001 || local > clipDuration(c) + 0.001) {
+      set({ status: "Park the playhead on that clip" });
+      return;
+    }
+    const t = Math.max(0, Math.min(clipDuration(c), local));
+    const pose = poseAt(c, c.timelineStart + t);
+    const near = nearestAnim(c.anim, t, 0.06);
+    const key = maskAnimWrite(near, animFromPose(near?.id ?? newId(), near?.t ?? t, pose));
+    const anim = near ? (c.anim ?? []).map((k) => (k.id === near.id ? key : k)) : [...(c.anim ?? []), key];
+    applyClips(
+      get,
+      set,
+      p.clips.map((x) => (x.id === c.id ? { ...x, anim, transform: pose } : x)),
+      "Motion key",
+    );
+    set({ selectedAnimId: key.id, selectedId: c.id, status: "Motion key — move the playhead and pose again" });
+  },
+  moveAnimKey: (clipId, keyId, t) => {
     const p = get().project;
     if (!p) return;
     set({
       project: {
         ...p,
-        clips: p.clips.map((c) => (c.id === id ? { ...c, transform: { ...xf } } : c)),
+        clips: p.clips.map((c) => {
+          if (c.id !== clipId) return c;
+          const tt = Math.max(0, Math.min(clipDuration(c), t));
+          return { ...c, anim: (c.anim ?? []).map((k) => (k.id === keyId ? { ...k, t: tt } : k)) };
+        }),
+      },
+    });
+  },
+  removeAnimKey: (clipId, keyId) => {
+    const p = get().project;
+    if (!p) return;
+    applyClips(
+      get,
+      set,
+      p.clips.map((c) => (c.id === clipId ? { ...c, anim: (c.anim ?? []).filter((k) => k.id !== keyId) } : c)),
+      "Remove key",
+    );
+    if (get().selectedAnimId === keyId) set({ selectedAnimId: null });
+  },
+  setAnimChannels: (clipId, keyId, patch) => {
+    const p = get().project;
+    if (!p) return;
+    applyClips(
+      get,
+      set,
+      p.clips.map((c) => {
+        if (c.id !== clipId) return c;
+        return {
+          ...c,
+          anim: (c.anim ?? []).map((k) =>
+            k.id === keyId ? { ...k, channels: { ...k.channels, ...patch } } : k,
+          ),
+        };
+      }),
+      "Motion key",
+    );
+  },
+  liveTransform: (id, xf, write) => {
+    const p = get().project;
+    if (!p) return;
+    const ph = get().playhead;
+    set({
+      project: {
+        ...p,
+        clips: p.clips.map((c) => {
+          if (c.id !== id) return c;
+          const prev = c.transform ?? xf;
+          const transform = writeTransform(prev, xf, write);
+          if (!(c.anim?.length)) return { ...c, transform };
+          const t = Math.max(0, Math.min(clipDuration(c), ph - c.timelineStart));
+          const near = nearestAnim(c.anim, t, 0.08);
+          const posed = animFromPose(near?.id ?? newId(), near?.t ?? t, near ? writeTransform(near, xf, write) : xf);
+          const key = maskAnimWrite(near, posed);
+          const anim = near ? c.anim.map((k) => (k.id === near.id ? key : k)) : [...c.anim, key];
+          return { ...c, anim, transform };
+        }),
       },
     });
   },

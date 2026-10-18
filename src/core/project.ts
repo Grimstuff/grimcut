@@ -1,4 +1,4 @@
-import { clipXf, evenPx, xfScaleX, xfScaleY, type ClipTransform } from "./canvas";
+import { evenPx, poseAt, xfScaleX, xfScaleY, type ClipTransform } from "./canvas";
 import {
   type Clip,
   type ClipKind,
@@ -314,13 +314,33 @@ export function flattenCanvas(
   for (const c of [...clipsOn(p, "video"), ...clipsOn(p, "text")]) {
     marks.add(c.timelineStart);
     marks.add(clipEnd(c));
+    for (const k of c.anim ?? []) marks.add(c.timelineStart + k.t);
   }
   const sorted = [...marks].sort((a, b) => a - b);
-  const out: CompSlice[] = [];
+  const spans: { a: number; b: number }[] = [];
   for (let i = 0; i < sorted.length - 1; i++) {
     const a = sorted[i];
     const b = sorted[i + 1];
     if (b - a < 0.01) continue;
+    const moving = [...clipsOn(p, "video"), ...clipsOn(p, "text")].some((c) => {
+      const keys = [...(c.anim ?? [])].sort((x, y) => x.t - y.t);
+      if (keys.length < 2 || !(c.timelineStart < b && clipEnd(c) > a)) return false;
+      const local = a - c.timelineStart;
+      let left: (typeof keys)[number] | null = null;
+      for (const k of keys) if (k.t <= local + 1e-3) left = k;
+      if (!left) return false;
+      const next = keys.find((k) => k.t > left.t + 1e-3);
+      return !!next && next.channels?.blend !== false;
+    });
+    if (!moving || b - a < 0.09) {
+      spans.push({ a, b });
+      continue;
+    }
+    const step = 1 / 12;
+    for (let t = a; t < b - 0.01; t += step) spans.push({ a: t, b: Math.min(b, t + step) });
+  }
+  const out: CompSlice[] = [];
+  for (const { a, b } of spans) {
     const mid = (a + b) / 2;
     const layers: CompLayer[] = [];
     const texts: CompText[] = [];
@@ -329,7 +349,7 @@ export function flattenCanvas(
       if (c) {
         const path = clipSourcePath(p, c);
         const size = mediaSize(path, fallback, byPath);
-        const xf: ClipTransform = clipXf(c);
+        const xf: ClipTransform = poseAt(c, mid);
         layers.push({
           sourcePath: path,
           sourceStart: c.sourceStart + (a - c.timelineStart),
@@ -347,7 +367,7 @@ export function flattenCanvas(
       }
       const tx = clipAt(p, mid, "text", layer);
       if (tx && (tx.text ?? "").length) {
-        const xf = clipXf(tx);
+        const xf = poseAt(tx, mid);
         texts.push({
           text: tx.text ?? "",
           fontFamily: tx.fontFamily ?? "Segoe UI",

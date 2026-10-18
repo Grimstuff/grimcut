@@ -1285,6 +1285,9 @@ fn run_filtered_encode(
             args.push("-an".into());
         }
         args.extend(video_encode_args(enc, plan, fps));
+        // Source chapter markers keep their episode timestamps and stretch the
+        // seek bar past the cut. Subs are burned, not copied as a stream.
+        args.extend(["-map_chapters".into(), "-1".into(), "-dn".into(), "-sn".into()]);
         args.push(plan.output_path.clone());
         let (err, code) = run_ffmpeg_progress(app, ffmpeg, &args, dur, &label)?;
         if code == 0 {
@@ -1876,6 +1879,8 @@ fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
         "copy".into(),
         "-map".into(),
         "0:v:0".into(),
+        "-map_chapters".into(),
+        "-1".into(),
         "-dn".into(),
         "-sn".into(),
     ];
@@ -1939,6 +1944,8 @@ fn extract_copy(
         "copy".into(),
         "-map".into(),
         "0:v:0".into(),
+        "-map_chapters".into(),
+        "-1".into(),
         "-dn".into(),
         "-sn".into(),
         "-avoid_negative_ts".into(),

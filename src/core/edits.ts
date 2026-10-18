@@ -12,7 +12,7 @@ import {
   cloneClip,
   newId,
 } from "./types";
-import { defaultTransform } from "./canvas";
+import { animRetimed, defaultTransform } from "./canvas";
 import { clipAt, partner } from "./project";
 
 export type EditResult = { ok: true; clips: Clip[] } | { ok: false; error: string };
@@ -21,17 +21,20 @@ function sliceOne(clip: Clip, at: number): Clip[] | null {
   const offset = at - clip.timelineStart;
   if (offset <= MIN_CLIP || clipDuration(clip) - offset <= MIN_CLIP) return null;
   const src = clip.sourceStart + offset;
+  const dur = clipDuration(clip);
   const left: Clip = {
-    ...clip,
+    ...cloneClip(clip),
     id: newId(),
     sourceEnd: src,
+    anim: animRetimed(clip, 0, offset),
   };
   const right: Clip = {
-    ...clip,
+    ...cloneClip(clip),
     id: newId(),
     timelineStart: at,
     sourceStart: src,
     linkGroup: clip.linkGroup ? newId() : null,
+    anim: animRetimed(clip, offset, dur),
   };
   if (left.linkGroup && right.linkGroup) {
     // left keeps old group; right gets new — caller remaps partners
@@ -137,11 +140,13 @@ export function tryTrim(
       const delta = start - next.sourceStart;
       next.sourceStart = start;
       next.timelineStart = Math.max(0, next.timelineStart + delta);
+      next.anim = animRetimed(c, delta, delta + (c.sourceEnd - start));
     } else {
       let end = newSourceEdge;
       if (c.kind !== "text" && p.sourceDuration > 0) end = Math.min(end, p.sourceDuration);
       if (end < next.sourceStart + MIN_CLIP) end = next.sourceStart + MIN_CLIP;
       next.sourceEnd = end;
+      next.anim = animRetimed(c, 0, end - c.sourceStart);
     }
     return next;
   };
@@ -241,7 +246,14 @@ function punchLayer(
         if (!leftGroup.has(g)) leftGroup.set(g, g);
         g = leftGroup.get(g)!;
       }
-      next.push({ ...cloneClip(c), id: newId(), sourceEnd: c.sourceStart + (a - t0), linkGroup: g ?? null });
+      const cut = a - t0;
+      next.push({
+        ...cloneClip(c),
+        id: newId(),
+        sourceEnd: c.sourceStart + cut,
+        linkGroup: g ?? null,
+        anim: animRetimed(c, 0, cut),
+      });
     }
     if (b < t1 - MIN_CLIP) {
       let g: string | null = c.linkGroup;
@@ -249,12 +261,14 @@ function punchLayer(
         if (!rightGroup.has(g)) rightGroup.set(g, newId());
         g = rightGroup.get(g)!;
       }
+      const cut = b - t0;
       next.push({
         ...cloneClip(c),
         id: newId(),
         timelineStart: b,
-        sourceStart: c.sourceStart + (b - t0),
+        sourceStart: c.sourceStart + cut,
         linkGroup: g,
+        anim: animRetimed(c, cut, clipDuration(c)),
       });
     }
   }

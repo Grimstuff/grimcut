@@ -7,7 +7,7 @@ import {
   canvasSnapPoints,
   canvasSnapThresh,
   clipDrawRect,
-  clipXf,
+  poseAt,
   contrastInk,
   nearestPoint,
   pointInRotatedRect,
@@ -99,9 +99,9 @@ function srcSize(clip: Clip) {
   return { w: m?.width || 1920, h: m?.height || 1080 };
 }
 
-function rectOf(clip: Clip, cw: number, ch: number) {
+function rectOf(clip: Clip, cw: number, ch: number, at: number) {
   const sz = srcSize(clip);
-  return clipDrawRect(sz.w, sz.h, cw, ch, clipXf(clip), clip.kind === "text" ? "text" : "video");
+  return clipDrawRect(sz.w, sz.h, cw, ch, poseAt(clip, at), clip.kind === "text" ? "text" : "video");
 }
 
 export function Preview() {
@@ -221,7 +221,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         const n = Number.parseFloat(d.typed);
         if (Number.isFinite(n)) {
           const clip = useEditor.getState().project?.clips.find((c) => c.id === d.id);
-          if (clip) useEditor.getState().liveTransform(d.id, { ...clipXf(clip), rotation: n });
+          if (clip) useEditor.getState().liveTransform(d.id, { ...poseAt(clip, useEditor.getState().playhead), rotation: n }, { rotate: true });
           setRotHud(n);
           setRotTyped(true);
         }
@@ -233,7 +233,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         const n = Number.parseFloat(d.typed);
         if (Number.isFinite(n)) {
           const clip = useEditor.getState().project?.clips.find((c) => c.id === d.id);
-          if (clip) useEditor.getState().liveTransform(d.id, { ...clipXf(clip), rotation: n });
+          if (clip) useEditor.getState().liveTransform(d.id, { ...poseAt(clip, useEditor.getState().playhead), rotation: n }, { rotate: true });
           setRotHud(n);
           setRotTyped(true);
         }
@@ -281,7 +281,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
   const hitClip = (cx: number, cy: number): Clip | null => {
     const order = [textOver, textBase, overClip, baseClip].filter(Boolean) as Clip[];
     for (const c of order) {
-      if (pointInRotatedRect(cx, cy, rectOf(c, cw, ch))) return c;
+      if (pointInRotatedRect(cx, cy, rectOf(c, cw, ch, useEditor.getState().playhead))) return c;
     }
     return null;
   };
@@ -312,21 +312,21 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     const t = tEarly;
     const rapid = isRapidSecondClick(e);
     if (t.closest(".bbox-rot") && selectedLive) {
-      const rect = rectOf(selectedLive, cw, ch);
+      const rect = rectOf(selectedLive, cw, ch, useEditor.getState().playhead);
       drag.current = {
         kind: "rotate",
         id: selectedLive.id,
-        rot0: clipXf(selectedLive).rotation,
+        rot0: rect.rotation,
         ang0: Math.atan2(pt.y - rect.cy, pt.x - rect.cx),
         typed: "",
         before: snapshotClips(),
       };
-      setRotHud(clipXf(selectedLive).rotation);
+      setRotHud(rect.rotation);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
     if (t.closest(".bbox-center") && selectedLive) {
-      const rect = rectOf(selectedLive, cw, ch);
+      const rect = rectOf(selectedLive, cw, ch, useEditor.getState().playhead);
       drag.current = {
         kind: "move",
         id: selectedLive.id,
@@ -349,7 +349,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     const handle = t.closest(".bbox-handle") as HTMLElement | null;
     if (handle && selectedLive) {
       const corner = (handle.dataset.corner ?? "se") as Corner;
-      const rect = rectOf(selectedLive, cw, ch);
+      const rect = rectOf(selectedLive, cw, ch, useEditor.getState().playhead);
       const a = cornerAnchor(rect, corner);
       drag.current = {
         kind: "scale",
@@ -360,8 +360,8 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         rot: rect.rotation,
         startW: rect.w,
         startH: rect.h,
-        scaleX0: xfScaleX(clipXf(selectedLive)),
-        scaleY0: xfScaleY(clipXf(selectedLive)),
+        scaleX0: xfScaleX(poseAt(selectedLive, useEditor.getState().playhead)),
+        scaleY0: xfScaleY(poseAt(selectedLive, useEditor.getState().playhead)),
         cx0: rect.cx,
         cy0: rect.cy,
         before: snapshotClips(),
@@ -377,7 +377,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         return;
       }
       useEditor.getState().select(hit.id);
-      const rect = rectOf(hit, cw, ch);
+      const rect = rectOf(hit, cw, ch, useEditor.getState().playhead);
       drag.current = {
         kind: "move",
         id: hit.id,
@@ -410,7 +410,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     const p = useEditor.getState().project;
     const clip = p?.clips.find((c) => c.id === d.id);
     if (!p || !clip) return;
-    const xf = clipXf(clip);
+    const xf = poseAt(clip, useEditor.getState().playhead);
     const targets = canvasMagnetPoints(cw, ch);
     const thresh = canvasSnapThresh(view.z);
     if (d.kind === "move") {
@@ -435,11 +435,15 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
       left = snapped.left;
       top = snapped.top;
       setHotDot(snapped.hot);
-      useEditor.getState().liveTransform(d.id, {
-        ...xf,
-        x: left + d.w / 2 - cw / 2,
-        y: top + d.h / 2 - ch / 2,
-      });
+      useEditor.getState().liveTransform(
+        d.id,
+        {
+          ...xf,
+          x: left + d.w / 2 - cw / 2,
+          y: top + d.h / 2 - ch / 2,
+        },
+        { pan: true },
+      );
     } else if (d.kind === "scale") {
       const sz = srcSize(clip);
       let mx = pt.x;
@@ -524,19 +528,26 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
       if (clip.kind === "text") {
         const sx = d.scaleX0 * (w / Math.max(1, d.startW));
         const sy = d.scaleY0 * (h / Math.max(1, d.startH));
-        useEditor.getState().liveTransform(d.id, {
-          x: left + w / 2 - cw / 2,
-          y: top + h / 2 - ch / 2,
-          scale: (sx + sy) / 2,
-          scaleX: sx,
-          scaleY: sy,
-          rotation: d.rot,
-        });
+        useEditor.getState().liveTransform(
+          d.id,
+          {
+            x: left + w / 2 - cw / 2,
+            y: top + h / 2 - ch / 2,
+            scale: (sx + sy) / 2,
+            scaleX: sx,
+            scaleY: sy,
+            rotation: d.rot,
+          },
+          { pan: true, scale: true },
+        );
       } else {
-        useEditor.getState().liveTransform(d.id, rectToTransform(left, top, w, h, cw, ch, sz.w, sz.h, d.rot));
+        useEditor.getState().liveTransform(d.id, rectToTransform(left, top, w, h, cw, ch, sz.w, sz.h, d.rot), {
+          pan: true,
+          scale: true,
+        });
       }
     } else if (d.kind === "rotate") {
-      const rect = rectOf(clip, cw, ch);
+      const rect = rectOf(clip, cw, ch, useEditor.getState().playhead);
       const ang = Math.atan2(pt.y - rect.cy, pt.x - rect.cx);
       const raw = d.rot0 + ((ang - d.ang0) * 180) / Math.PI;
       const typed = Number.parseFloat(d.typed);
@@ -555,7 +566,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
       const rotation = snapRotation(raw, 3);
       setRotHud(rotation);
       setRotTyped(false);
-      useEditor.getState().liveTransform(d.id, { ...xf, rotation });
+      useEditor.getState().liveTransform(d.id, { ...xf, rotation }, { rotate: true });
     }
   };
 
@@ -570,7 +581,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     if (d.kind === "move" && !d.armed) return;
     if (d.kind === "scale") {
       const clip = useEditor.getState().project?.clips.find((c) => c.id === d.id);
-      if (clip?.kind === "text") {
+      if (clip?.kind === "text" && !(clip.anim?.length)) {
         const baked = bakeTextScale(clip);
         useEditor.getState().setTextProps(
           clip.id,
@@ -584,7 +595,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
 
   const placeVideo = (clip: Clip | null) => {
     if (!clip) return { display: "none" as const };
-    const rect = rectOf(clip, cw, ch);
+    const rect = rectOf(clip, cw, ch, useEditor.getState().playhead);
     const blur = clipBlur(clip);
     return {
       display: "block" as const,
@@ -597,7 +608,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     };
   };
 
-  const bbox = selectedLive ? rectOf(selectedLive, cw, ch) : null;
+  const bbox = selectedLive ? rectOf(selectedLive, cw, ch, useEditor.getState().playhead) : null;
 
   return (
     <div className="preview-wrap is-canvas">
@@ -678,6 +689,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
                 ch={ch}
                 selected={selectedId === c!.id}
                 editing={editingTextId === c!.id}
+                at={playhead}
               />
             ))}
           </div>
@@ -731,15 +743,17 @@ function TextBox({
   ch,
   selected,
   editing,
+  at,
 }: {
   clip: Clip;
   cw: number;
   ch: number;
   selected: boolean;
   editing: boolean;
+  at: number;
 }) {
   const inner = useRef<HTMLDivElement>(null);
-  const xf = clipXf(clip);
+  const xf = poseAt(clip, at);
   const boxW = clip.boxW || 280;
   const boxH = clip.boxH || 88;
   const sx = xfScaleX(xf);
@@ -825,7 +839,7 @@ function sampleStage(
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const draw = (el: HTMLVideoElement | null, clip: Clip | null) => {
     if (!el || !clip || el.readyState < 2) return;
-    const r = rectOf(clip, cw, ch);
+    const r = rectOf(clip, cw, ch, useEditor.getState().playhead);
     ctx.save();
     ctx.translate(r.cx, r.cy);
     ctx.rotate((r.rotation * Math.PI) / 180);

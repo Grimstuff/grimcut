@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FONT_SIZE_STEPS, RES_BY_AR, arOf, stepFontSize, visualFontSize } from "../core/canvas";
-import type { Clip, TextAlign } from "../core/types";
+import type { AnimChannels, AnimKey, Clip, TextAlign } from "../core/types";
 import { SUB_PICK_ID, SUBTITLE_FONTS, SUBTITLE_SWATCHES, textSubtitleTracks } from "../core/types";
 import { useEditor } from "../store/editorStore";
 import { ColorPop, TextColorPop } from "./TextColorPop";
@@ -714,6 +714,35 @@ function IconSpeaker({ muted }: { muted: boolean }) {
   );
 }
 
+function MotionKeyProps({ clipId, k }: { clipId: string; k: AnimKey }) {
+  const pan = k.channels?.pan !== false;
+  const rotate = k.channels?.rotate !== false;
+  const scale = k.channels?.scale !== false;
+  const blend = k.channels?.blend !== false;
+  const toggle = (patch: AnimChannels) => useEditor.getState().setAnimChannels(clipId, k.id, patch);
+  return (
+    <div className="tb-props tb-motion">
+      <button type="button" className="tb-motion-btn" title="Capture position on this key" onClick={() => toggle({ pan: !pan })}>
+        {pan ? "✓ Pan" : "Pan"}
+      </button>
+      <button type="button" className="tb-motion-btn" title="Capture rotation on this key" onClick={() => toggle({ rotate: !rotate })}>
+        {rotate ? "✓ Rotate" : "Rotate"}
+      </button>
+      <button type="button" className="tb-motion-btn" title="Capture scale on this key" onClick={() => toggle({ scale: !scale })}>
+        {scale ? "✓ Scale" : "Scale"}
+      </button>
+      <button
+        type="button"
+        className="tb-motion-btn"
+        title={blend ? "Smooth move into this key" : "Jump to this key"}
+        onClick={() => toggle({ blend: !blend })}
+      >
+        {blend ? "✓ Blend" : "Blend"}
+      </button>
+    </div>
+  );
+}
+
 function parseRes(text: string): { w: number; h: number } | null {
   const m = text.trim().match(/^(\d{2,5})\s*[x×]\s*(\d{2,5})$/i);
   if (!m) return null;
@@ -728,6 +757,7 @@ export function TransportBar() {
   const playhead = useEditor((s) => s.playhead);
   const playing = useEditor((s) => s.playing);
   const selectedId = useEditor((s) => s.selectedId);
+  const selectedAnimId = useEditor((s) => s.selectedAnimId);
   const selectedEffectId = useEditor((s) => s.selectedEffectId);
   const range = useEditor((s) => s.range);
   const busy = useEditor((s) => s.busy);
@@ -801,9 +831,26 @@ export function TransportBar() {
   const onClip = project.clips.some(
     (c) => playhead > c.timelineStart && playhead < c.timelineStart + (c.sourceEnd - c.sourceStart),
   );
+  const motionHits = project.clips.filter((c) => {
+    if (c.kind === "audio") return false;
+    const dur = c.sourceEnd - c.sourceStart;
+    return playhead >= c.timelineStart - 0.001 && playhead <= c.timelineStart + dur + 0.001;
+  });
+  const motionClip =
+    motionHits.find((c) => c.id === selectedId) ?? motionHits.find((c) => c.layer === "over") ?? motionHits[0] ?? null;
   const canDel = !!selected || canCut || !!selectedEffectId;
   const muted = volume <= 0.001;
   const textClip = selected?.kind === "text" ? selected : null;
+  let motionKey: { clipId: string; key: AnimKey } | null = null;
+  if (selectedAnimId) {
+    for (const c of project.clips) {
+      const key = c.anim?.find((k) => k.id === selectedAnimId);
+      if (key) {
+        motionKey = { clipId: c.id, key };
+        break;
+      }
+    }
+  }
   const blurFx =
     selected && selectedEffectId
       ? (selected.effects?.find((e) => e.id === selectedEffectId && e.kind === "blur") ?? null)
@@ -818,7 +865,9 @@ export function TransportBar() {
   return (
     <div className="tl-bar" ref={wrap}>
       <div className="tl-bar-left">
-        {blurFx ? (
+        {motionKey ? (
+          <MotionKeyProps clipId={motionKey.clipId} k={motionKey.key} />
+        ) : blurFx ? (
           <div className="tb-props">
             <span className="tb-prop-label">Blur</span>
             <span className="tb-blur-track">
@@ -1094,6 +1143,19 @@ export function TransportBar() {
 
       <div className="tl-bar-right">
         <div className="tb-group">
+          <button
+            type="button"
+            className="icon-btn tb-key"
+            title={
+              motionClip
+                ? "Motion key at the playhead. Move the playhead and pose again to animate."
+                : "Park the playhead on a video or text clip"
+            }
+            disabled={!motionClip}
+            onClick={() => useEditor.getState().addAnimKey()}
+          >
+            ◆
+          </button>
           <button type="button" className="icon-btn" title="Add text layer" onClick={() => useEditor.getState().addTextClip()}>
             <IconText />
           </button>
