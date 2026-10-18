@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEditor } from "../store/editorStore";
 import { AboutDialog } from "./AboutDialog";
+import { UpdateDialog } from "./UpdateDialog";
+import { checkForUpdates } from "../lib/updates";
 
 async function winAction(kind: "minimize" | "toggleMaximize" | "close") {
   try {
@@ -117,6 +119,16 @@ export function AppChrome() {
             className="menu-option"
             onClick={() => {
               setMenuOpen(false);
+              void checkForUpdates();
+            }}
+          >
+            Check for updates
+          </button>
+          <button
+            type="button"
+            className="menu-option"
+            onClick={() => {
+              setMenuOpen(false);
               setAboutOpen(true);
             }}
           >
@@ -170,6 +182,7 @@ export function AppChrome() {
       </div>
       {menu}
       <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <UpdateDialog />
     </header>
   );
 }

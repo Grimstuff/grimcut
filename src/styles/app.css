@@ -77,6 +77,92 @@
   background: var(--gp-win-accent-hover);
 }
 
+/* ── Update dialog (reuses the About card) ────────────── */
+.update-dialog {
+  width: min(400px, 100%);
+}
+
+.update-dialog .about-title {
+  margin-bottom: 14px;
+}
+
+.update-notes {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--gp-border-subtle);
+  border-radius: 8px;
+  background: var(--gp-surface-elevated);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--gp-text-secondary);
+  text-align: left;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.update-error {
+  word-break: break-word;
+  user-select: text;
+}
+
+.update-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.update-later {
+  appearance: none;
+  border: 1px solid var(--gp-border);
+  background: transparent;
+  color: var(--gp-text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 96px;
+}
+
+.update-later:hover {
+  background: var(--gp-tab-hover);
+}
+
+.update-later:focus-visible {
+  outline: 2px solid var(--gp-focus-ring);
+  outline-offset: 2px;
+}
+
+.update-progress {
+  height: 4px;
+  margin: 4px 0 6px;
+  border-radius: 2px;
+  background: var(--gp-border-subtle);
+  overflow: hidden;
+}
+
+.update-progress-bar {
+  height: 100%;
+  background: var(--gp-accent);
+  transition: width 120ms linear;
+}
+
+.update-progress-bar.indeterminate {
+  width: 30%;
+  animation: update-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes update-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
 .crash-screen {
   box-sizing: border-box;
   height: 100%;

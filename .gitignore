@@ -17,3 +17,5 @@ src-tauri/icons/app-icon-source.png
 src-tauri/icons/_ico256.png
 src-tauri/icons/64x64.png
 release/
+src-tauri/icons/ios/
+src-tauri/icons/android/

@@ -1,6 +1,6 @@
 [package]
 name = "grimcut"
-version = "0.1.0"
+version = "0.2.0"
 description = "Simple Fluent-style video editor"
 authors = ["Grimmers"]
 edition = "2021"
@@ -21,6 +21,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# Same minor as @tauri-apps/plugin-updater; 2.13+ wants a newer tauri.
+tauri-plugin-updater = "~2.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

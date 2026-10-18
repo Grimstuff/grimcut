@@ -2500,12 +2500,24 @@ pub(crate) fn uuid_like() -> String {
     )
 }
 
+/// True when this exe was put in place by the NSIS installer, which leaves
+/// `uninstall.exe` beside it. The portable exe can't self-update: the updater
+/// runs the installer, which would install a second copy elsewhere.
+#[tauri::command]
+fn is_installed_copy() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("uninstall.exe").is_file()))
+        .unwrap_or(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             if let Some(win) = app.get_webview_window("main") {
                 windows_sizing::set_app(app.handle().clone());
                 windows_sizing::install_hook(&win);
@@ -2530,6 +2542,7 @@ pub fn run() {
             append_play_log,
             get_system_accent,
             ensure_ffmpeg_cmd,
+            is_installed_copy,
             agent::agent_reply,
             agent::grab_frame,
             filmstrip::filmstrip_luma,
