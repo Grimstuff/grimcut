@@ -61,7 +61,7 @@ npm run grimcut -- collapse-blank
 npm run grimcut -- export D:\clip-cut.mp4
 ```
 
-MCP stdio: `npm run mcp` (see BACKLOG). If Grimcut is already open, the CLI/MCP drive that instance.
+MCP stdio: `npm run mcp` (tools `grimcut_open`, `grimcut_delete_range`, `grimcut_collapse_blank`, `grimcut_frame`, `grimcut_export`, …). If Grimcut is already open, the CLI/MCP drive that instance through `%LOCALAPPDATA%\Grimcut\agent.json`, so the UI stays in sync. Otherwise they run the same core headless. Headless export handles a single remaining video clip (stream copy); multi-clip, overlay and burn-in need the app.
 
 ## License
 
