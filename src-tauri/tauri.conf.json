@@ -38,6 +38,15 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdBRDExRTZEODdGRDZCQ0IKUldUTGEvMkhiUjdSZW9LQWFZenlIYjhZU3JveWNXNGtGbnBUV3FqZmk0bENhV1RsRjY0Y09kQk8K",
+      "endpoints": ["https://github.com/Grimstuff/grimcut/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
