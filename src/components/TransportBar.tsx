@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { FONT_SIZE_STEPS, RES_BY_AR, arOf, stepFontSize, visualFontSize } from "../core/canvas";
+import { FONT_SIZE_STEPS, RES_BY_AR, arOf, motionTarget, stepFontSize, visualFontSize } from "../core/canvas";
 import type { AnimChannels, AnimKey, Clip, TextAlign } from "../core/types";
-import { SUB_PICK_ID, SUBTITLE_FONTS, SUBTITLE_SWATCHES, textSubtitleTracks } from "../core/types";
+import { SUB_PICK_ID, SUBTITLE_FONTS, SUBTITLE_SWATCHES, formatTime, textSubtitleTracks } from "../core/types";
 import { useEditor } from "../store/editorStore";
 import { ColorPop, TextColorPop } from "./TextColorPop";
 import { COMMON_FONTS, listSystemFonts } from "../lib/systemFonts";
@@ -714,30 +714,111 @@ function IconSpeaker({ muted }: { muted: boolean }) {
   );
 }
 
-function MotionKeyProps({ clipId, k }: { clipId: string; k: AnimKey }) {
-  const pan = k.channels?.pan !== false;
-  const rotate = k.channels?.rotate !== false;
-  const scale = k.channels?.scale !== false;
-  const blend = k.channels?.blend !== false;
-  const toggle = (patch: AnimChannels) => useEditor.getState().setAnimChannels(clipId, k.id, patch);
+function IconKey() {
   return (
-    <div className="tb-props tb-motion">
-      <button type="button" className="tb-motion-btn" title="Capture position on this key" onClick={() => toggle({ pan: !pan })}>
-        {pan ? "✓ Pan" : "Pan"}
-      </button>
-      <button type="button" className="tb-motion-btn" title="Capture rotation on this key" onClick={() => toggle({ rotate: !rotate })}>
-        {rotate ? "✓ Rotate" : "Rotate"}
-      </button>
-      <button type="button" className="tb-motion-btn" title="Capture scale on this key" onClick={() => toggle({ scale: !scale })}>
-        {scale ? "✓ Scale" : "Scale"}
-      </button>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path fill="currentColor" d="M8 2.3 13.7 8 8 13.7 2.3 8z" />
+    </svg>
+  );
+}
+function IconStep({ dir }: { dir: 1 | -1 }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d={dir > 0 ? "M6.5 4 10.5 8l-4 4" : "M9.5 4 5.5 8l4 4"}
+      />
+    </svg>
+  );
+}
+
+function IconEase({ smooth }: { smooth: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d={smooth ? "M2 11.5C6 11.5 8 2.5 12 2.5" : "M2 11.5h5v-9h5"}
+      />
+    </svg>
+  );
+}
+
+function LayerBadge({ clip }: { clip: Clip }) {
+  const over = clip.layer === "over";
+  return (
+    <span className={`tb-layer-badge${over ? " is-over" : ""}`} title={over ? "Overlay — layer 2" : "Main track — layer 1"}>
+      {over ? "L2" : "L1"}
+    </span>
+  );
+}
+
+function MotionKeyProps({ clip, k }: { clip: Clip; k: AnimKey }) {
+  const keys = [...(clip.anim ?? [])].sort((a, b) => a.t - b.t);
+  const idx = keys.findIndex((x) => x.id === k.id);
+  const on = (ch: keyof AnimChannels) => k.channels?.[ch] !== false;
+  const toggle = (patch: AnimChannels) => useEditor.getState().setAnimChannels(clip.id, k.id, patch);
+  const chip = (ch: "pan" | "rotate" | "scale", label: string, what: string) => (
+    <button
+      type="button"
+      className={`tb-chip${on(ch) ? " is-on" : ""}`}
+      aria-pressed={on(ch)}
+      title={on(ch) ? `This key sets ${what} — click to let ${what} pass through` : `Let this key set ${what}`}
+      onClick={() => toggle({ [ch]: !on(ch) })}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="tb-props tb-motion" role="group" aria-label="Motion key">
+      <LayerBadge clip={clip} />
       <button
         type="button"
-        className="tb-motion-btn"
-        title={blend ? "Smooth move into this key" : "Jump to this key"}
-        onClick={() => toggle({ blend: !blend })}
+        className="icon-btn tb-step"
+        title="Previous key"
+        aria-label="Previous key"
+        disabled={idx <= 0}
+        onClick={() => useEditor.getState().stepAnimKey(-1)}
       >
-        {blend ? "✓ Blend" : "Blend"}
+        <IconStep dir={-1} />
+      </button>
+      <span className="tb-motion-pos" title={`Key ${idx + 1} of ${keys.length}, ${formatTime(k.t)} into the clip`}>
+        {idx + 1}/{keys.length}
+      </span>
+      <button
+        type="button"
+        className="icon-btn tb-step"
+        title="Next key"
+        aria-label="Next key"
+        disabled={idx >= keys.length - 1}
+        onClick={() => useEditor.getState().stepAnimKey(1)}
+      >
+        <IconStep dir={1} />
+      </button>
+      <span className="tb-sep" aria-hidden="true" />
+      {chip("pan", "Move", "position")}
+      {chip("rotate", "Rotate", "rotation")}
+      {chip("scale", "Scale", "scale")}
+      <span className="tb-sep" aria-hidden="true" />
+      <button
+        type="button"
+        className="tb-chip tb-ease"
+        title={
+          on("blend")
+            ? "Smooth: glides from the previous key. Click to hold the previous pose, then jump here."
+            : "Hold: keeps the previous pose, then jumps here. Click to glide smoothly instead."
+        }
+        onClick={() => toggle({ blend: !on("blend") })}
+      >
+        <IconEase smooth={on("blend")} />
+        <span className="tb-ease-label">{on("blend") ? "Smooth" : "Hold"}</span>
       </button>
     </div>
   );
@@ -831,22 +912,19 @@ export function TransportBar() {
   const onClip = project.clips.some(
     (c) => playhead > c.timelineStart && playhead < c.timelineStart + (c.sourceEnd - c.sourceStart),
   );
-  const motionHits = project.clips.filter((c) => {
-    if (c.kind === "audio") return false;
-    const dur = c.sourceEnd - c.sourceStart;
-    return playhead >= c.timelineStart - 0.001 && playhead <= c.timelineStart + dur + 0.001;
-  });
-  const motionClip =
-    motionHits.find((c) => c.id === selectedId) ?? motionHits.find((c) => c.layer === "over") ?? motionHits[0] ?? null;
-  const canDel = !!selected || canCut || !!selectedEffectId;
+  const motionClip = motionTarget(project.clips, playhead, selectedId);
+  const motionOnKey =
+    !!motionClip && !!motionClip.anim?.some((k) => Math.abs(motionClip.timelineStart + k.t - playhead) < 0.06);
+  const motionLayer = motionClip?.layer === "over" ? "overlay (layer 2)" : "main track (layer 1)";
+  const canDel = !!selected || canCut || !!selectedEffectId || !!selectedAnimId;
   const muted = volume <= 0.001;
   const textClip = selected?.kind === "text" ? selected : null;
-  let motionKey: { clipId: string; key: AnimKey } | null = null;
+  let motionKey: { clip: Clip; key: AnimKey } | null = null;
   if (selectedAnimId) {
     for (const c of project.clips) {
       const key = c.anim?.find((k) => k.id === selectedAnimId);
       if (key) {
-        motionKey = { clipId: c.id, key };
+        motionKey = { clip: c, key };
         break;
       }
     }
@@ -866,7 +944,7 @@ export function TransportBar() {
     <div className="tl-bar" ref={wrap}>
       <div className="tl-bar-left">
         {motionKey ? (
-          <MotionKeyProps clipId={motionKey.clipId} k={motionKey.key} />
+          <MotionKeyProps clip={motionKey.clip} k={motionKey.key} />
         ) : blurFx ? (
           <div className="tb-props">
             <span className="tb-prop-label">Blur</span>
@@ -1145,16 +1223,20 @@ export function TransportBar() {
         <div className="tb-group">
           <button
             type="button"
-            className="icon-btn tb-key"
+            className={`icon-btn tb-key${motionClip?.layer === "over" ? " is-over" : ""}${motionOnKey ? " is-on" : ""}`}
             title={
               motionClip
-                ? "Motion key at the playhead. Move the playhead and pose again to animate."
+                ? motionOnKey
+                  ? `Update the motion key on the ${motionLayer} at the playhead`
+                  : `Add a motion key on the ${motionLayer}. Move the playhead and pose again to animate.`
                 : "Park the playhead on a video or text clip"
             }
+            aria-label="Motion key"
             disabled={!motionClip}
             onClick={() => useEditor.getState().addAnimKey()}
           >
-            ◆
+            <IconKey />
+            {motionClip ? <span className="tb-key-layer">{motionClip.layer === "over" ? "2" : "1"}</span> : null}
           </button>
           <button type="button" className="icon-btn" title="Add text layer" onClick={() => useEditor.getState().addTextClip()}>
             <IconText />
@@ -1184,7 +1266,13 @@ export function TransportBar() {
           <button
             type="button"
             className="icon-btn"
-            title={selectedEffectId ? "Delete effect (Delete)" : "Delete clip or range (Delete)"}
+            title={
+              motionKey
+                ? "Remove motion key (Delete)"
+                : selectedEffectId
+                  ? "Delete effect (Delete)"
+                  : "Delete clip or range (Delete)"
+            }
             disabled={!canDel}
             onClick={() => useEditor.getState().del()}
           >

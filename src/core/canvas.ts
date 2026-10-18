@@ -1,4 +1,4 @@
-import { newId, type AnimKey, type Clip } from "./types";
+import { clipDuration, newId, type AnimKey, type Clip } from "./types";
 
 export type ClipTransform = {
   x: number;
@@ -280,6 +280,28 @@ export function animRetimed(clip: Clip, localFrom: number, localTo: number): Ani
   if (!poseNear(poseAt(withKept, span), want1)) out.push(sample(localTo, span));
   out.sort((a, b) => a.t - b.t);
   return out.length ? out : undefined;
+}
+
+/**
+ * Clip the motion key button acts on at the playhead: the selected video/text clip,
+ * else the overlay (2nd layer, it sits on top), else the main track.
+ */
+export function motionTarget(clips: Clip[], playhead: number, selectedId: string | null): Clip | null {
+  const hit = clips.filter(
+    (c) =>
+      c.kind !== "audio" &&
+      playhead >= c.timelineStart - 0.001 &&
+      playhead <= c.timelineStart + clipDuration(c) + 0.001,
+  );
+  return hit.find((c) => c.id === selectedId) ?? hit.find((c) => c.layer === "over") ?? hit[0] ?? null;
+}
+
+/** Previous / next key on a clip from a timeline time. Keys within 30 ms of `timelineT` are skipped. */
+export function stepKey(c: Clip, timelineT: number, dir: 1 | -1): AnimKey | null {
+  const local = timelineT - c.timelineStart;
+  const keys = [...(c.anim ?? [])].sort((a, b) => a.t - b.t);
+  if (dir > 0) return keys.find((k) => k.t > local + 0.03) ?? null;
+  return [...keys].reverse().find((k) => k.t < local - 0.03) ?? null;
 }
 
 /** Native pixels of the clip, scaled so the whole frame fits the canvas at scale=1. */
