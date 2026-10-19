@@ -779,9 +779,13 @@ export const useEditor = create<EditorState>((set, get) => ({
     const playhead = Math.max(0, Math.min(max, t));
     const hit = clipAt(p, playhead, "video");
     const mapped = mapTimelineToSource(p, playhead);
+    // A clip the user picked stays picked while the playhead is still on it — passing over an
+    // overlay must not steal the selection from the main track.
+    const cur = p.clips.find((c) => c.id === get().selectedId);
+    const stays = !!cur && playhead >= cur.timelineStart - 0.001 && playhead <= clipEnd(cur) + 0.001;
     set({
       playhead,
-      selectedId: opts?.keepSelection ? get().selectedId : (hit?.id ?? get().selectedId),
+      selectedId: opts?.keepSelection || stays ? get().selectedId : (hit?.id ?? get().selectedId),
       showBlack: isTimelineGap(p, playhead),
     });
     return mapped?.source ?? null;

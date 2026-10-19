@@ -915,6 +915,15 @@ export function TransportBar() {
   const motionClip = motionTarget(project.clips, playhead, selectedId);
   const motionOnKey =
     !!motionClip && !!motionClip.anim?.some((k) => Math.abs(motionClip.timelineStart + k.t - playhead) < 0.06);
+  const otherLayerClip = motionClip
+    ? (project.clips.find(
+        (c) =>
+          c.kind !== "audio" &&
+          c.layer !== motionClip.layer &&
+          playhead >= c.timelineStart - 0.001 &&
+          playhead <= c.timelineStart + (c.sourceEnd - c.sourceStart) + 0.001,
+      ) ?? null)
+    : null;
   const motionLayer = motionClip?.layer === "over" ? "overlay (layer 2)" : "main track (layer 1)";
   const canDel = !!selected || canCut || !!selectedEffectId || !!selectedAnimId;
   const muted = volume <= 0.001;
@@ -1221,6 +1230,7 @@ export function TransportBar() {
 
       <div className="tl-bar-right">
         <div className="tb-group">
+          <span className="tb-key-wrap">
           <button
             type="button"
             className={`icon-btn tb-key${motionClip?.layer === "over" ? " is-over" : ""}${motionOnKey ? " is-on" : ""}`}
@@ -1236,8 +1246,24 @@ export function TransportBar() {
             onClick={() => useEditor.getState().addAnimKey()}
           >
             <IconKey />
-            {motionClip ? <span className="tb-key-layer">{motionClip.layer === "over" ? "2" : "1"}</span> : null}
           </button>
+          {motionClip ? (
+            <button
+              type="button"
+              className={`tb-key-layer${otherLayerClip ? " can-switch" : ""}`}
+              title={
+                otherLayerClip
+                  ? `Keying layer ${motionClip.layer === "over" ? "2" : "1"} — click to key layer ${motionClip.layer === "over" ? "1" : "2"} instead`
+                  : `Keying layer ${motionClip.layer === "over" ? "2" : "1"} (the only layer under the playhead)`
+              }
+              aria-label="Switch keyed layer"
+              disabled={!otherLayerClip}
+              onClick={() => otherLayerClip && useEditor.getState().select(otherLayerClip.id)}
+            >
+              {motionClip.layer === "over" ? "2" : "1"}
+            </button>
+          ) : null}
+          </span>
           <button type="button" className="icon-btn" title="Add text layer" onClick={() => useEditor.getState().addTextClip()}>
             <IconText />
           </button>
