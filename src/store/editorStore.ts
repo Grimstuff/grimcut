@@ -16,7 +16,7 @@ import {
   snapStart,
   timelineDuration,
 } from "../core/project";
-import { AR_PRESETS, RES_BY_AR, evenPx, hugTextClip, maskAnimWrite, poseAt, writeTransform, type ClipTransform } from "../core/canvas";
+import { AR_PRESETS, RES_BY_AR, evenPx, hugTextClip, maskAnimWrite, motionTarget, poseAt, stepKey, writeTransform, type ClipTransform } from "../core/canvas";
 import {
   UndoStack,
   chunkFromRange,
@@ -228,6 +228,8 @@ type EditorState = {
   removeAnimKey: (clipId: string, keyId: string) => void;
   setAnimChannels: (clipId: string, keyId: string, patch: AnimChannels) => void;
   selectAnimKey: (clipId: string | null, keyId: string | null) => void;
+  /** Jump the playhead to the previous / next motion key on the keyed clip and select it. */
+  stepAnimKey: (dir: 1 | -1) => void;
   addTextClip: () => void;
   setTextProps: (id: string, patch: Partial<Clip>, opts?: { hug?: boolean }) => void;
   hugText: (id: string) => void;
@@ -263,12 +265,9 @@ function syncHist(s: Partial<EditorState>): Partial<EditorState> {
   };
 }
 
-function motionClipAt(clips: Clip[], playhead: number, selectedId: string | null): Clip | null {
-  const hit = clips.filter((c) => {
-    if (c.kind === "audio") return false;
-    return playhead >= c.timelineStart - 0.001 && playhead <= c.timelineStart + clipDuration(c) + 0.001;
-  });
-  return hit.find((c) => c.id === selectedId) ?? hit.find((c) => c.layer === "over") ?? hit[0] ?? null;
+/** "overlay (layer 2)" / "main track" for status lines. */
+function layerName(c: Clip) {
+  return c.layer === "over" ? "overlay (layer 2)" : "main track";
 }
 
 function nearestAnim(keys: AnimKey[] | undefined, t: number, within: number): AnimKey | undefined {
@@ -780,9 +779,13 @@ export const useEditor = create<EditorState>((set, get) => ({
     const playhead = Math.max(0, Math.min(max, t));
     const hit = clipAt(p, playhead, "video");
     const mapped = mapTimelineToSource(p, playhead);
+    // A clip the user picked stays picked while the playhead is still on it — passing over an
+    // overlay must not steal the selection from the main track.
+    const cur = p.clips.find((c) => c.id === get().selectedId);
+    const stays = !!cur && playhead >= cur.timelineStart - 0.001 && playhead <= clipEnd(cur) + 0.001;
     set({
       playhead,
-      selectedId: opts?.keepSelection ? get().selectedId : (hit?.id ?? get().selectedId),
+      selectedId: opts?.keepSelection || stays ? get().selectedId : (hit?.id ?? get().selectedId),
       showBlack: isTimelineGap(p, playhead),
     });
     return mapped?.source ?? null;
@@ -1201,7 +1204,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   addAnimKey: (id) => {
     const p = get().project;
     if (!p) return;
-    const c = id ? p.clips.find((x) => x.id === id) : motionClipAt(p.clips, get().playhead, get().selectedId);
+    const c = id ? p.clips.find((x) => x.id === id) : motionTarget(p.clips, get().playhead, get().selectedId);
     if (!c || c.kind === "audio") {
       set({ status: "Park the playhead on a video or text clip" });
       return;
@@ -1222,7 +1225,31 @@ export const useEditor = create<EditorState>((set, get) => ({
       p.clips.map((x) => (x.id === c.id ? { ...x, anim, transform: pose } : x)),
       "Motion key",
     );
-    set({ selectedAnimId: key.id, selectedId: c.id, status: "Motion key — move the playhead and pose again" });
+    set({
+      selectedAnimId: key.id,
+      selectedId: c.id,
+      status: `Motion key on ${layerName(c)} — move the playhead and pose again`,
+    });
+  },
+  stepAnimKey: (dir) => {
+    const p = get().project;
+    if (!p) return;
+    const keyId = get().selectedAnimId;
+    const c =
+      (keyId ? p.clips.find((x) => x.anim?.some((k) => k.id === keyId)) : undefined) ??
+      motionTarget(p.clips, get().playhead, get().selectedId);
+    if (!c?.anim?.length) {
+      set({ status: "No motion keys on this clip yet" });
+      return;
+    }
+    const from = c.anim.find((x) => x.id === keyId);
+    const k = stepKey(c, from ? c.timelineStart + from.t : get().playhead, dir);
+    if (!k) {
+      set({ status: dir > 0 ? "Last motion key" : "First motion key" });
+      return;
+    }
+    get().setPlayhead(c.timelineStart + k.t, { keepSelection: true });
+    get().selectAnimKey(c.id, k.id);
   },
   moveAnimKey: (clipId, keyId, t) => {
     const p = get().project;

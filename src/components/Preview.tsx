@@ -137,6 +137,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
   const [rotTyped, setRotTyped] = useState(false);
   const overlayUrl = useEditor((s) => s.overlayUrl);
   const project = useEditor((s) => s.project);
+  const hasProject = !!project;
   const playhead = useEditor((s) => s.playhead);
   const playing = useEditor((s) => s.playing);
   const scrubPreview = useEditor((s) => s.scrubPreview);
@@ -183,7 +184,8 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
       }
       setOverlayVideo(null);
     };
-  }, [overlayUrl, project]);
+    // Not `project`: every move/resize makes a new project, and reloading here blanked the overlay mid-drag.
+  }, [overlayUrl, hasProject]);
 
   useEffect(() => {
     syncPreviewToPlayhead();

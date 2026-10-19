@@ -621,6 +621,19 @@ function MotionKeys({ clips, pps }: { clips: Clip[]; pps: number }) {
   if (!marks.length) return null;
   return (
     <>
+      {marks.map((clip) => {
+        const keys = [...(clip.anim ?? [])].sort((a, b) => a.t - b.t);
+        const over = clip.layer === "over";
+        const first = keys[0].t;
+        const last = keys[keys.length - 1].t;
+        return keys.length > 1 ? (
+          <div
+            key={`${clip.id}-path`}
+            className={`anim-path${over ? " is-over" : ""}`}
+            style={{ left: (clip.timelineStart + first) * pps, width: (last - first) * pps }}
+          />
+        ) : null;
+      })}
       {marks.map((clip) =>
         [...(clip.anim ?? [])]
           .sort((a, b) => a.t - b.t)
@@ -628,9 +641,9 @@ function MotionKeys({ clips, pps }: { clips: Clip[]; pps: number }) {
             <button
               key={k.id}
               type="button"
-              className={`anim-key${selectedAnimId === k.id ? " is-on" : ""}${k.channels?.blend === false ? " is-step" : ""}`}
-              style={{ left: (clip.timelineStart + k.t) * pps, top: clip.layer === "over" ? 16 : 28 }}
-              title="Motion key — drag to move in time. Delete or right-click removes it."
+              className={`anim-key${clip.layer === "over" ? " is-over" : ""}${selectedAnimId === k.id ? " is-on" : ""}${k.channels?.blend === false ? " is-step" : ""}`}
+              style={{ left: (clip.timelineStart + k.t) * pps }}
+              title={`Motion key on ${clip.layer === "over" ? "overlay (layer 2)" : "main track"} — drag to move in time. Delete or right-click removes it.`}
               onPointerDown={(e) => {
                 if (e.button === 1) return;
                 e.stopPropagation();
