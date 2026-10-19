@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEditor } from "../store/editorStore";
 import { AboutDialog } from "./AboutDialog";
-import appIcon from "../assets/app-icon-64.png";
 import { UpdateDialog } from "./UpdateDialog";
 import { checkForUpdates } from "../lib/updates";
 
@@ -156,10 +155,7 @@ export function AppChrome() {
           <span />
         </span>
       </button>
-      <div className="chrome-title">
-        <img className="chrome-app-icon" src={appIcon} alt="" width={16} height={16} draggable={false} />
-        Grimcut
-      </div>
+      <div className="chrome-title">Grimcut</div>
       <div className="chrome-drag" data-tauri-drag-region onDoubleClick={() => void winAction("toggleMaximize")} />
       <div className="chrome-controls">
         <button type="button" className="win-btn" title="Minimize" onClick={() => void winAction("minimize")}>
