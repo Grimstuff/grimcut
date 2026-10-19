@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import grimsoftIcon from "../assets/grimsoft-icon.jpg";
+import appIcon from "../assets/app-icon.png";
 
 const FALLBACK_VERSION = "0.1";
 
@@ -49,7 +49,7 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
         aria-labelledby="about-title"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <img className="about-icon" src={grimsoftIcon} alt="Grimsoft" width={72} height={72} draggable={false} />
+        <img className="about-icon" src={appIcon} alt="" width={72} height={72} draggable={false} />
         <h1 id="about-title" className="about-title">
           Grimcut
         </h1>
