@@ -598,6 +598,11 @@ fn probe_sync(app: AppHandle, path: String) -> Result<MediaInfoDto, String> {
                     video_codec = s["codec_name"].as_str().map(|x| x.to_string());
                     width = s["width"].as_i64().map(|x| x as i32);
                     height = s["height"].as_i64().map(|x| x as i32);
+                    // Phones store portrait video as landscape frames plus a rotation flag.
+                    // FFmpeg and the webview both apply it, so report the size as displayed.
+                    if is_quarter_turn(s) {
+                        std::mem::swap(&mut width, &mut height);
+                    }
                     frame_rate = s["avg_frame_rate"]
                         .as_str()
                         .and_then(parse_rate)
@@ -634,6 +639,20 @@ fn probe_sync(app: AppHandle, path: String) -> Result<MediaInfoDto, String> {
         keyframe_times: vec![],
         subtitles,
     })
+}
+
+/// Rotation of a probed video stream, from the display matrix (current FFmpeg) or the
+/// legacy `rotate` tag (older FFmpeg).
+fn stream_rotation(s: &serde_json::Value) -> i64 {
+    let from_side = s["side_data_list"].as_array().and_then(|list| {
+        list.iter().find_map(|d| d["rotation"].as_f64())
+    });
+    let from_tag = || s["tags"]["rotate"].as_str().and_then(|x| x.trim().parse::<f64>().ok());
+    from_side.or_else(from_tag).map(|r| r.round() as i64).unwrap_or(0)
+}
+
+fn is_quarter_turn(s: &serde_json::Value) -> bool {
+    stream_rotation(s).rem_euclid(180) == 90
 }
 
 fn is_text_sub(codec: &str) -> bool {
@@ -2516,4 +2535,31 @@ pub fn run() {
                 agent::clear_agent_file();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn display_matrix_rotation_is_a_quarter_turn() {
+        let s = json!({ "width": 1280, "height": 720,
+            "side_data_list": [{ "side_data_type": "Display Matrix", "rotation": -90 }] });
+        assert_eq!(stream_rotation(&s), -90);
+        assert!(is_quarter_turn(&s));
+    }
+
+    #[test]
+    fn legacy_rotate_tag_is_read() {
+        let s = json!({ "tags": { "rotate": "270" } });
+        assert!(is_quarter_turn(&s));
+    }
+
+    #[test]
+    fn upright_and_upside_down_keep_their_size() {
+        assert!(!is_quarter_turn(&json!({})));
+        assert!(!is_quarter_turn(&json!({ "side_data_list": [{ "rotation": 180 }] })));
+        assert!(!is_quarter_turn(&json!({ "side_data_list": [{ "side_data_type": "CPB" }] })));
+    }
 }
