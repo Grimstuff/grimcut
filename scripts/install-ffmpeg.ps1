@@ -6,7 +6,19 @@ if ((Test-Path (Join-Path $dest "ffmpeg.exe")) -and (Test-Path (Join-Path $dest 
     exit 0
 }
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
-$url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip"
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+# Newest release-branch build (ffmpeg-n<ver>-latest-win64-gpl-shared-<ver>.zip). Its name changes with each
+# FFmpeg version and old ones are removed, so look it up. Fall back to the master build, whose name never changes.
+$url = $null
+try {
+    $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest' -Headers @{ 'User-Agent' = 'Grimcut' }
+    $url = $rel.assets |
+        Where-Object { $_.name -match '^ffmpeg-n(\d+(\.\d+)+)-latest-win64-gpl-shared-[\d.]+\.zip$' } |
+        Sort-Object { [version]($_.name -replace '^ffmpeg-n(\d+(\.\d+)+)-.*$', '$1') } -Descending |
+        Select-Object -First 1 -ExpandProperty browser_download_url
+} catch { }
+if (-not $url) { $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip' }
 $zip = Join-Path $env:TEMP "grimcut-ffmpeg.zip"
 $extract = Join-Path $env:TEMP "grimcut-ffmpeg-extract"
 Write-Host "Downloading FFmpeg…"

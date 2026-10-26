@@ -284,16 +284,28 @@ fn ensure_ffmpeg_cmd(app: AppHandle) -> Result<String, String> {
     ensure_ffmpeg(&app).map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Sets `$url` to the FFmpeg build to download. Same lookup as scripts/install-ffmpeg.ps1.
+const FFMPEG_URL_PS: &str = r#"$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+# Newest release-branch build (ffmpeg-n<ver>-latest-win64-gpl-shared-<ver>.zip). Its name changes with each
+# FFmpeg version and old ones are removed, so look it up. Fall back to the master build, whose name never changes.
+$url = $null
+try {
+    $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest' -Headers @{ 'User-Agent' = 'Grimcut' }
+    $url = $rel.assets |
+        Where-Object { $_.name -match '^ffmpeg-n(\d+(\.\d+)+)-latest-win64-gpl-shared-[\d.]+\.zip$' } |
+        Sort-Object { [version]($_.name -replace '^ffmpeg-n(\d+(\.\d+)+)-.*$', '$1') } -Descending |
+        Select-Object -First 1 -ExpandProperty browser_download_url
+} catch { }
+if (-not $url) { $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip' }
+"#;
+
 fn fetch_ffmpeg(dest: &Path) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    let url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip";
     let zip = std::env::temp_dir().join("grimcut-ffmpeg.zip");
     let extract = std::env::temp_dir().join("grimcut-ffmpeg-extract");
     let zip_s = zip.to_string_lossy().replace('\'', "''");
-    let url_s = url.replace('\'', "''");
-    let ps = format!(
-        "Invoke-WebRequest -Uri '{url_s}' -OutFile '{zip_s}'"
-    );
+    let ps = format!("{FFMPEG_URL_PS}\nInvoke-WebRequest -Uri $url -OutFile '{zip_s}'");
     let mut cmd = hidden_command("powershell");
     cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps]);
     let status = cmd.status().map_err(|e| format!("Could not start download: {e}"))?;

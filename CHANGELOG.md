@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The FFmpeg download always fetches the newest FFmpeg build. It used to ask for FFmpeg 8.1 by name, and that download would have broken once 8.1 was retired.
+
 ## 0.2.1
 
 - Motion keys work the same on the overlay (2nd layer) as on the main track. The key button shows which layer it keys (1 or 2); click the little number to switch layers.
