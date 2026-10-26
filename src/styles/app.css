@@ -694,21 +694,82 @@ html.is-live-resize body {
   overflow: visible;
 }
 
-.tb-motion-btn {
+.tb-motion {
+  gap: 3px;
+}
+
+.tb-layer-badge {
+  height: 18px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #061018;
+  background: #7ee0ff;
+  margin-right: 2px;
+}
+
+.tb-layer-badge.is-over {
+  background: #f0a090;
+}
+
+.tb-motion-pos {
+  min-width: 2.4em;
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--gp-text-secondary);
+}
+
+.tb-step {
+  width: 22px;
   height: 26px;
-  padding: 0 8px;
+}
+
+.tb-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--gp-border);
+}
+
+.tb-chip {
+  height: 24px;
+  padding: 0 7px;
   border: 1px solid var(--gp-border);
-  border-radius: 4px;
-  background: var(--gp-surface);
-  color: var(--gp-text);
-  font-size: 12px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--gp-text-secondary);
+  font-size: 11px;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.tb-motion-btn:hover {
+.tb-chip:hover {
   background: var(--gp-tab-hover);
+  color: var(--gp-text);
+}
+
+.tb-chip.is-on {
+  border-color: var(--gp-accent);
+  background: var(--gp-accent-soft);
+  color: var(--gp-text);
+}
+
+.tb-chip:focus-visible {
+  outline: 2px solid var(--gp-focus-ring);
+  outline-offset: 1px;
+}
+
+.tb-ease {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--gp-text);
 }
 
 .tb-font {
@@ -2044,19 +2105,51 @@ html.is-live-resize body {
 .handle.left { left: 0; }
 .handle.right { right: 0; }
 
-.anim-key {
+/* Motion keys: one colour per layer — main track cyan, overlay (layer 2) the overlay clip's coral. */
+.lane-body {
+  --key-base: #7ee0ff;
+  --key-over: #f0a090;
+}
+
+.anim-path {
   position: absolute;
+  top: 40px;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--key-base);
+  opacity: 0.8;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  z-index: 9;
+}
+
+.anim-path.is-over {
+  top: 14px;
+  background: var(--key-over);
+}
+
+.anim-key {
+  --key: var(--key-base);
+  position: absolute;
+  top: 35px;
   width: 11px;
   height: 11px;
   margin-left: -6px;
   padding: 0;
   border: 1px solid #061018;
   border-radius: 1px;
-  background: #7ee0ff;
+  background: var(--key);
   transform: rotate(45deg);
   cursor: ew-resize;
   z-index: 10;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  transition: transform 0.08s ease;
+}
+
+.anim-key.is-over {
+  --key: var(--key-over);
+  top: 9px;
 }
 
 .anim-key::before {
@@ -2065,29 +2158,87 @@ html.is-live-resize body {
   inset: -7px;
 }
 
+.anim-key:hover {
+  transform: rotate(45deg) scale(1.2);
+}
+
 .anim-key.is-on {
   background: #fff;
-  box-shadow: 0 0 0 2px #7ee0ff;
+  box-shadow: 0 0 0 2px var(--key);
 }
 
 .anim-key.is-step {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px #7ee0ff;
+  background: #1a1a1a;
+  box-shadow: inset 0 0 0 1.5px var(--key);
 }
 
 .anim-key.is-step.is-on {
   background: #fff;
-  box-shadow: 0 0 0 2px #7ee0ff;
+  box-shadow: 0 0 0 2px var(--key);
+}
+
+/* Narrow windows: the ease chip keeps its icon only. */
+@media (max-width: 1000px) {
+  .tb-ease-label {
+    display: none;
+  }
 }
 
 .tb-key {
-  font-size: 14px;
-  line-height: 1;
+  position: relative;
   color: #7ee0ff;
+}
+
+.tb-key.is-over {
+  color: #f0a090;
+}
+
+.tb-key.is-on {
+  background: var(--gp-accent-soft);
 }
 
 .tb-key:disabled {
   color: var(--gp-text-secondary);
+}
+
+.tb-key-wrap {
+  position: relative;
+  display: inline-grid;
+}
+
+.tb-key-layer {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 2px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--gp-text);
+}
+
+.tb-key-layer.can-switch {
+  cursor: pointer;
+  border-color: var(--gp-border);
+  background: var(--gp-surface-elevated);
+}
+
+.tb-key-layer.can-switch:hover {
+  border-color: var(--gp-accent);
+  background: var(--gp-accent-soft-strong);
+}
+
+.tb-key-layer:disabled {
+  opacity: 1;
+  cursor: default;
 }
 
 .kf-tick {
