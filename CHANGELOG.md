@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.3
+
 - Fixed: vertical phone videos opened as widescreen and looked stretched. Grimcut now reads the video's rotation flag, so the canvas, preview and export come out portrait.
 
 ## 0.2.2
