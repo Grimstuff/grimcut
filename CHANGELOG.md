@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Easier to let go of a motion key: click it again, or click anywhere else on the timeline (Esc still works too).
+
 ## 0.2.0
 
 - New app icon in the Grim suite style.
