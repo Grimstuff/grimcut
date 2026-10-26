@@ -536,6 +536,12 @@ export function Timeline() {
           scrollerEl = el;
         }}
         className={`tl-scroll${fitted ? " is-fitted" : ""}`}
+        onPointerDownCapture={(e) => {
+          // Clicking anywhere on the timeline except a motion key lets go of the selected key.
+          if (e.button !== 0 || (e.target as HTMLElement).closest(".anim-key")) return;
+          const st = useEditor.getState();
+          if (st.selectedAnimId) st.selectAnimKey(null, null);
+        }}
         onPointerMove={(e) => onDragMove(e)}
         onPointerUp={() => finishDrag()}
       >
@@ -643,13 +649,14 @@ function MotionKeys({ clips, pps }: { clips: Clip[]; pps: number }) {
               type="button"
               className={`anim-key${clip.layer === "over" ? " is-over" : ""}${selectedAnimId === k.id ? " is-on" : ""}${k.channels?.blend === false ? " is-step" : ""}`}
               style={{ left: (clip.timelineStart + k.t) * pps }}
-              title={`Motion key on ${clip.layer === "over" ? "overlay (layer 2)" : "main track"} — drag to move in time. Delete or right-click removes it.`}
+              title={`Motion key on ${clip.layer === "over" ? "overlay (layer 2)" : "main track"} — drag to move in time, click again or Esc to deselect. Delete or right-click removes it.`}
               onPointerDown={(e) => {
                 if (e.button === 1) return;
                 e.stopPropagation();
                 e.preventDefault();
                 if (e.button !== 0) return;
                 const st = useEditor.getState();
+                const wasOn = st.selectedAnimId === k.id;
                 st.selectAnimKey(clip.id, k.id);
                 const startX = e.clientX;
                 const t0 = k.t;
@@ -666,6 +673,7 @@ function MotionKeys({ clips, pps }: { clips: Clip[]; pps: number }) {
                   window.removeEventListener("pointermove", move);
                   window.removeEventListener("pointerup", up);
                   if (moved) useEditor.getState().commit(before, "Move motion key");
+                  else if (wasOn) useEditor.getState().selectAnimKey(null, null);
                 };
                 window.addEventListener("pointermove", move);
                 window.addEventListener("pointerup", up);
