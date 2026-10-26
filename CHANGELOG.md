@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The FFmpeg download (installer, in-app prompt and dev script) always fetches the newest stable FFmpeg build instead of a pinned 8.1, so it keeps working when FFmpeg moves on. Tested with FFmpeg 9.0.
+
 ## 0.2.1
 
 - Motion keys work the same on the overlay (2nd layer) as on the main track. The key button shows which layer it keys (1 or 2); click the little number to switch layers.

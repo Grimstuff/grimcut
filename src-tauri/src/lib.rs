@@ -284,63 +284,24 @@ fn ensure_ffmpeg_cmd(app: AppHandle) -> Result<String, String> {
     ensure_ffmpeg(&app).map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Same script the installer runs: picks the newest stable FFmpeg release build.
+const INSTALL_FFMPEG_PS1: &str = include_str!("../../scripts/install-ffmpeg.ps1");
+
 fn fetch_ffmpeg(dest: &Path) -> Result<(), String> {
-    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    let url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip";
-    let zip = std::env::temp_dir().join("grimcut-ffmpeg.zip");
-    let extract = std::env::temp_dir().join("grimcut-ffmpeg-extract");
-    let zip_s = zip.to_string_lossy().replace('\'', "''");
-    let url_s = url.replace('\'', "''");
-    let ps = format!(
-        "Invoke-WebRequest -Uri '{url_s}' -OutFile '{zip_s}'"
-    );
+    let script = std::env::temp_dir().join("grimcut-install-ffmpeg.ps1");
+    // BOM so Windows PowerShell reads the script as UTF-8.
+    fs::write(&script, format!("\u{feff}{INSTALL_FFMPEG_PS1}")).map_err(|e| e.to_string())?;
     let mut cmd = hidden_command("powershell");
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps]);
-    let status = cmd.status().map_err(|e| format!("Could not start download: {e}"))?;
-    if !status.success() {
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Dest")
+        .arg(dest);
+    let status = cmd.status().map_err(|e| format!("Could not start download: {e}"));
+    let _ = fs::remove_file(&script);
+    if !status?.success() {
         return Err("FFmpeg download failed. Get a Windows GPL build from https://www.gyan.dev/ffmpeg/builds/ or https://github.com/BtbN/FFmpeg-Builds/releases and put ffmpeg.exe + ffprobe.exe (and DLLs) next to Grimcut.exe in an ffmpeg folder.".into());
     }
-    if extract.exists() {
-        let _ = fs::remove_dir_all(&extract);
-    }
-    let extract_s = extract.to_string_lossy().replace('\'', "''");
-    let unzip = format!("Expand-Archive -Path '{zip_s}' -DestinationPath '{extract_s}' -Force");
-    let mut cmd = hidden_command("powershell");
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &unzip]);
-    let status = cmd.status().map_err(|e| format!("Could not extract FFmpeg: {e}"))?;
-    if !status.success() {
-        return Err("Could not extract FFmpeg zip.".into());
-    }
-    let bin = find_ffmpeg_bin_dir(&extract).ok_or("FFmpeg zip had no bin folder.")?;
-    for ent in fs::read_dir(&bin).map_err(|e| e.to_string())? {
-        let ent = ent.map_err(|e| e.to_string())?;
-        let name = ent.file_name();
-        let n = name.to_string_lossy();
-        if n.eq_ignore_ascii_case("ffplay.exe") {
-            continue;
-        }
-        if n.ends_with(".exe") || n.ends_with(".dll") {
-            fs::copy(ent.path(), dest.join(name)).map_err(|e| e.to_string())?;
-        }
-    }
-    let _ = fs::remove_file(&zip);
-    let _ = fs::remove_dir_all(&extract);
     Ok(())
-}
-
-fn find_ffmpeg_bin_dir(root: &Path) -> Option<PathBuf> {
-    let direct = root.join("bin");
-    if direct.join("ffmpeg.exe").exists() {
-        return Some(direct);
-    }
-    let rd = fs::read_dir(root).ok()?;
-    for ent in rd.flatten() {
-        let p = ent.path().join("bin");
-        if p.join("ffmpeg.exe").exists() {
-            return Some(p);
-        }
-    }
-    None
 }
 
 pub(crate) fn hidden_command(bin: impl AsRef<Path>) -> Command {
