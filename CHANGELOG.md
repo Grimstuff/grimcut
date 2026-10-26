@@ -2,7 +2,14 @@
 
 ## Unreleased
 
+## 0.2.1
+
+- Motion keys work the same on the overlay (2nd layer) as on the main track. The key button shows which layer it keys (1 or 2); click the little number to switch layers.
+- New motion key bar: step between keys, toggle Move / Rotate / Scale per key, and pick Smooth or Hold. Keys are coloured by layer on the timeline.
 - Easier to let go of a motion key: click it again, or click anywhere else on the timeline (Esc still works too).
+- Fixed: an overlay could vanish after moving or resizing it (very visible with transparent webm overlays).
+- Fixed: playing or scrubbing across an overlay no longer steals the selection from a clip you picked on the main track.
+
 
 ## 0.2.0
 
