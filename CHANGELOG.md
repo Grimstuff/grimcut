@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The move bar on main-track clips now sits at the bottom of the clip, so an overlay (2nd layer) above it no longer covers it. Overlay clips keep theirs at the top.
+
 ## 0.2.2
 
 - The FFmpeg download (installer, in-app prompt and dev script) always fetches the newest stable FFmpeg build instead of a pinned 8.1, so it keeps working when FFmpeg moves on. Tested with FFmpeg 9.0.
