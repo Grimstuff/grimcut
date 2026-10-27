@@ -456,8 +456,8 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         my = hit.y;
         setHotDot({ x: hit.x, y: hit.y });
       } else setHotDot(null);
-      const free = e.shiftKey;
       const fromCenter = e.altKey;
+      const free = !e.shiftKey && !fromCenter;
       const ar = d.startW / Math.max(1, d.startH);
       let w: number;
       let h: number;
@@ -621,7 +621,7 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        title="Wheel zoom · Alt-drag pan · Alt+scale from center · Shift+move axis lock · Shift+scale stretch"
+        title="Wheel zoom · Alt-drag pan · Shift+scale keep aspect · Alt+scale keep aspect from center · Shift+move axis lock"
       >
         <div className="canvas-space" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}>
           <div className="canvas-stage" style={{ width: cw, height: ch }}>
