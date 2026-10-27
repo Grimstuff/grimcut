@@ -753,7 +753,7 @@ function ClipView({
         if (e.altKey) onMove(e);
         else onRange(e);
       }}
-      title={`${clip.kind} ${overlay ? "overlay (2nd layer)" : "base"} — drag to select, top box to move`}
+      title={`${clip.kind} ${overlay ? "overlay (2nd layer)" : "base"} — drag to select, ${overlay ? "top" : "bottom"} box to move`}
     >
       {sel.map((s) => (
         <span
@@ -767,6 +767,7 @@ function ClipView({
       ))}
       <div
         className="clip-grip"
+        style={!overlay && fxList.length ? { left: 6 + fxList.length * 15 } : undefined}
         title="Drag to move clip (or Alt+drag)"
         onPointerDown={(e) => {
           e.stopPropagation();

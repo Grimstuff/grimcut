@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The move bar on main-track clips now sits at the bottom of the clip, so an overlay (2nd layer) above it no longer covers it. Overlay clips keep theirs at the top.
+
 ## 0.2.5
 
 - Fixed: the "Generating thumbnails" status in the bottom bar flickered on and off while thumbnails loaded in batches. It now stays on steadily until all background work is done.

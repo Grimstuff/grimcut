@@ -2083,6 +2083,11 @@ html.is-live-resize body {
   border-radius: 2px;
 }
 
+.clip:not(.overlay) > .clip-grip {
+  top: auto;
+  bottom: 3px;
+}
+
 .clip-grip:hover {
   background: rgba(10, 10, 10, 0.72);
   border-color: #fff;
@@ -2113,7 +2118,7 @@ html.is-live-resize body {
 
 .anim-path {
   position: absolute;
-  top: 40px;
+  top: 36px;
   height: 2px;
   margin-top: -1px;
   background: var(--key-base);
@@ -2132,7 +2137,7 @@ html.is-live-resize body {
 .anim-key {
   --key: var(--key-base);
   position: absolute;
-  top: 35px;
+  top: 31px;
   width: 11px;
   height: 11px;
   margin-left: -6px;
