@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.6
+
 - The move bar on main-track clips now sits at the bottom of the clip, so an overlay (2nd layer) above it no longer covers it. Overlay clips keep theirs at the top.
 
 ## 0.2.5
