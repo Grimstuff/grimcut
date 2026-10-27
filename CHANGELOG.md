@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: the "Generating thumbnails" status in the bottom bar flickered on and off while thumbnails loaded in batches. It now stays on steadily until all background work is done.
+
 ## 0.2.3
 
 - Fixed: vertical phone videos opened as widescreen and looked stretched. Grimcut now reads the video's rotation flag, so the canvas, preview and export come out portrait.

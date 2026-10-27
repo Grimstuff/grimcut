@@ -139,7 +139,7 @@ export default function App() {
         {Object.keys(bgJobs).length > 0 ? (
           <span className="status-jobs">
             <span className="status-spin" aria-hidden />
-            Generating {Object.values(bgJobs).join(" · ")}
+            Generating {[...new Set(Object.values(bgJobs))].join(" · ")}
           </span>
         ) : null}
       </footer>
