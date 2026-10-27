@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.2.4
+
+- Resizing a layer by a corner now stretches freely by default. Hold Shift to keep its aspect ratio (anchored to the opposite corner), or Alt to keep it from the center.
+
 ## 0.2.3
 
 - Fixed: vertical phone videos opened as widescreen and looked stretched. Grimcut now reads the video's rotation flag, so the canvas, preview and export come out portrait.
