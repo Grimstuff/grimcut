@@ -81,14 +81,33 @@ function scaleToMaxH(w: number, h: number, maxH: number) {
 const thumbBusy = new Set<string>();
 const keyBusy = new Set<string>();
 
+// Thumbnails arrive in back-to-back batches; hold each job's status briefly after it
+// ends so the next batch picks it up instead of the indicator blinking off and on.
+const JOB_LINGER_MS = 700;
+const jobLinger = new Map<string, ReturnType<typeof setTimeout>>();
+
 function startJob(get: () => EditorState, set: (s: Partial<EditorState>) => void, id: string, label: string) {
+  const pending = jobLinger.get(id);
+  if (pending) {
+    clearTimeout(pending);
+    jobLinger.delete(id);
+  }
+  if (get().bgJobs[id] === label) return;
   set({ bgJobs: { ...get().bgJobs, [id]: label } });
 }
 
 function endJob(get: () => EditorState, set: (s: Partial<EditorState>) => void, id: string) {
-  const next = { ...get().bgJobs };
-  delete next[id];
-  set({ bgJobs: next });
+  const pending = jobLinger.get(id);
+  if (pending) clearTimeout(pending);
+  jobLinger.set(
+    id,
+    setTimeout(() => {
+      jobLinger.delete(id);
+      const next = { ...get().bgJobs };
+      delete next[id];
+      set({ bgJobs: next });
+    }, JOB_LINGER_MS),
+  );
 }
 
 function fillKeyframes(get: () => EditorState, set: (s: Partial<EditorState>) => void, path: string) {

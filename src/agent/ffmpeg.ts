@@ -41,6 +41,22 @@ export function runTool(bin: string, args: string[]): Promise<{ stdout: string; 
   });
 }
 
+type ProbedStream = {
+  width?: number;
+  height?: number;
+  tags?: { rotate?: string };
+  side_data_list?: { rotation?: number }[];
+};
+
+/** Size as displayed: phones store portrait video as landscape frames plus a rotation flag. */
+export function displaySize(s: ProbedStream): { width: number | null; height: number | null } {
+  const rot = s.side_data_list?.find((d) => typeof d.rotation === "number")?.rotation ?? Number(s.tags?.rotate ?? 0);
+  const quarter = ((Math.round(rot) % 180) + 180) % 180 === 90;
+  const w = s.width ?? null;
+  const h = s.height ?? null;
+  return quarter ? { width: h, height: w } : { width: w, height: h };
+}
+
 export async function probeMedia(path: string): Promise<MediaInfo> {
   const { stdout, stderr, code } = await runTool(ffmpegBin("ffprobe"), [
     "-v",
@@ -54,7 +70,7 @@ export async function probeMedia(path: string): Promise<MediaInfo> {
   if (code !== 0) throw new Error(stderr.trim() || `ffprobe failed (${code})`);
   const v = JSON.parse(stdout) as {
     format?: { duration?: string };
-    streams?: { codec_type?: string; codec_name?: string; width?: number; height?: number; avg_frame_rate?: string }[];
+    streams?: (ProbedStream & { codec_type?: string; codec_name?: string; avg_frame_rate?: string })[];
   };
   let duration = Number(v.format?.duration ?? 0);
   let videoCodec: string | null = null;
@@ -66,8 +82,7 @@ export async function probeMedia(path: string): Promise<MediaInfo> {
   for (const s of v.streams ?? []) {
     if (s.codec_type === "video" && !videoCodec) {
       videoCodec = s.codec_name ?? null;
-      width = s.width ?? null;
-      height = s.height ?? null;
+      ({ width, height } = displaySize(s));
       const [n, d] = (s.avg_frame_rate ?? "0/1").split("/").map(Number);
       if (d) frameRate = n / d;
     }
