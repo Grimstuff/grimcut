@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+## 0.2.5
+
 - Fixed: the "Generating thumbnails" status in the bottom bar flickered on and off while thumbnails loaded in batches. It now stays on steadily until all background work is done.
+
+## 0.2.4
+
+- Resizing a layer by a corner now stretches freely by default. Hold Shift to keep its aspect ratio (anchored to the opposite corner), or Alt to keep it from the center.
 
 ## 0.2.3
 
