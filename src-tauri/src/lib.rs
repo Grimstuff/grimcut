@@ -380,8 +380,11 @@ fn run_ffmpeg_progress(
         argv.push("-nostats".into());
         argv.push(out);
     }
+    // FFmpeg must never wait on stdin (it reads keys like "q" from it).
+    argv.insert(0, "-nostdin".into());
     let mut cmd = hidden_command(ffmpeg);
     cmd.args(&argv)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut child = cmd
@@ -392,6 +395,22 @@ fn run_ffmpeg_progress(
     {
         *JOB.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
     }
+    // Drain stderr on its own thread. Reading it only after stdout closes
+    // deadlocks once FFmpeg fills the stderr pipe (AMF logs warnings per
+    // frame): FFmpeg blocks on stderr, stops writing progress, and the
+    // export sits at 0% forever.
+    let stderr_reader = stderr_pipe.map(|s| {
+        std::thread::spawn(move || {
+            let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+            for line in BufReader::new(s).lines().map_while(Result::ok) {
+                if tail.len() >= 400 {
+                    tail.pop_front();
+                }
+                tail.push_back(line);
+            }
+            tail.into_iter().collect::<Vec<_>>().join("\n")
+        })
+    });
     if let Some(out) = stdout {
         let r = BufReader::new(out);
         for line in r.lines().map_while(Result::ok) {
@@ -420,10 +439,6 @@ fn run_ffmpeg_progress(
             }
         }
     }
-    let mut err = String::new();
-    if let Some(s) = stderr_pipe {
-        err = BufReader::new(s).lines().map_while(Result::ok).collect::<Vec<_>>().join("\n");
-    }
     let cancelled = CANCEL.load(Ordering::SeqCst);
     let code = {
         let mut g = JOB.lock().unwrap_or_else(|e| e.into_inner());
@@ -437,6 +452,9 @@ fn run_ffmpeg_progress(
             None => -1,
         }
     };
+    let err = stderr_reader
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
     if cancelled {
         return Err("Export cancelled.".into());
     }
