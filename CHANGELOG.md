@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.10
 
 - Fixed: exporting some WebM (VP9) videos failed with "Invalid frame size in index" / "Conversion failed!". Grimcut forced FFmpeg's libvpx decoder on every WebM; it now does that only for WebMs that really have a transparent (alpha) layer, and if libvpx still can't read one it retries without transparency instead of failing.
 
