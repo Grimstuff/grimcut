@@ -1,11 +1,8 @@
 # Changelog
 
-## Unreleased
-
-- Clicking or dragging the playhead on the timeline now lands on whole frames (using each clip's own frame rate), so fully zoomed in the seek handle steps frame by frame instead of gliding between frames.
-
 ## 0.2.7
 
+- Clicking or dragging the playhead on the timeline now lands on whole frames (using each clip's own frame rate), so fully zoomed in the seek handle steps frame by frame instead of gliding between frames.
 - Fixed: exporting a cut that starts partway into a video sat at 0% for a long time (minutes on a long episode), because FFmpeg decoded everything before the cut first. It now jumps straight to the cut, so the export starts right away. Same picture, burned subtitles included.
 - Fixed: an export could freeze for good if FFmpeg printed a lot of warnings.
 - Fixed: exports could come out with no audio track at all while Grimcut reported a normal save (seen with long episodes cut far into the file). After every re-encode export Grimcut now checks that the file has audio when audio was expected, renders the audio on its own and adds it back if it is missing, and shows an error if it still cannot.
