@@ -392,3 +392,32 @@ export function flattenCanvas(
 export function replaceClips(p: VideoProject, clips: Clip[]): VideoProject {
   return { ...p, clips: clips.map(cloneClip) };
 }
+
+function usableFps(fps?: number | null): number | null {
+  return fps && fps > 1 && fps < 240 ? fps : null;
+}
+
+/**
+ * Snap a timeline time onto the frame grid of the video under it, so a seek lands on a whole
+ * source frame. Over a gap (or with no video) the grid starts at timeline 0. `fpsOf` gives a
+ * clip's source frame rate; unknown rates fall back to `fallbackFps`, then 30.
+ */
+export function snapToFrame(
+  p: VideoProject,
+  t: number,
+  fpsOf: (c: Clip) => number | null | undefined,
+  fallbackFps?: number | null,
+): number {
+  const fallback = usableFps(fallbackFps) ?? 30;
+  const c = clipAt(p, t, "video");
+  if (!c) return Math.round(t * fallback) / fallback;
+  const fps = usableFps(fpsOf(c)) ?? fallback;
+  const src = c.sourceStart + (t - c.timelineStart);
+  // Frame starts sit at k / fps in source time. Stay inside the clip so the playhead does not
+  // round onto a neighbour.
+  let k = Math.round(src * fps);
+  const firstK = Math.ceil(c.sourceStart * fps - 1e-6);
+  const lastK = Math.floor(c.sourceEnd * fps - 1e-6);
+  if (lastK >= firstK) k = Math.max(firstK, Math.min(lastK, k));
+  return c.timelineStart + (k / fps - c.sourceStart);
+}

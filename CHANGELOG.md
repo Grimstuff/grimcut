@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clicking or dragging the playhead on the timeline now lands on whole frames (using each clip's own frame rate), so fully zoomed in the seek handle steps frame by frame instead of gliding between frames.
+
 ## 0.2.7
 
 - Fixed: exporting a cut that starts partway into a video sat at 0% for a long time (minutes on a long episode), because FFmpeg decoded everything before the cut first. It now jumps straight to the cut, so the export starts right away. Same picture, burned subtitles included.
