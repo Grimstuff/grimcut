@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.8
 
 - Fully zoomed in, a cut (and dragging a clip edge) lands on the exact frame under the playhead instead of snapping to a nearby keyframe. At lower zoom cuts still snap to keyframes as before.
 
