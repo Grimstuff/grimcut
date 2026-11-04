@@ -2,10 +2,10 @@
 
 ## Unreleased
 
+## 0.2.6
+
 - The timeline no longer fights you over the horizontal scroll. During playback it keeps the playhead centred while following it, but as soon as you scroll, drag the scrollbar or pan, it stays where you put it. It picks the playhead up again when you press play, click to seek, or when playback reaches the middle of the view.
 - Middle mouse drag pans the timeline from anywhere on it, including over clips, handles and the playhead.
-
-## 0.2.6
 
 - The move bar on main-track clips now sits at the bottom of the clip, so an overlay (2nd layer) above it no longer covers it. Overlay clips keep theirs at the top.
 
