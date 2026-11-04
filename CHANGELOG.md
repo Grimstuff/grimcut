@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- You can now cut on the exact frame even when a keyframe is a frame or two away. Step to the frame with ← / → and press S, or press Alt+S (or Alt+double-click) anywhere. Plain S and double-click after clicking or dragging still snap to a nearby keyframe so exports can stream-copy.
+
 ## 0.2.8
 
 - Fully zoomed in, a cut (and dragging a clip edge) lands on the exact frame under the playhead instead of snapping to a nearby keyframe. At lower zoom cuts still snap to keyframes as before.

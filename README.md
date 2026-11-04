@@ -31,7 +31,7 @@ Two horizontal bars: **video** and **audio** (waveform). Linked A/V until you cl
 | Trim | Drag either end of a clip |
 | Move | Drag the clip (snaps to neighbors) |
 | Zoom | Scroll wheel |
-| Slice | `S`, Ctrl+X, or double-click the bar |
+| Slice | `S`, Ctrl+X, or double-click the bar (snaps to a nearby keyframe; Alt+S, Alt+double-click, or frame-stepping with ← / → first cuts on the exact frame) |
 | Range select | Drag on empty track |
 | Copy / paste | Ctrl+C / Ctrl+V (Shift+V paste as audio) |
 | Unlink A/V | **Linked** button |
@@ -43,6 +43,8 @@ Two horizontal bars: **video** and **audio** (waveform). Linked A/V until you cl
 | Ctrl+O | Open |
 | Space | Play / pause |
 | S / Ctrl+X | Slice at playhead |
+| Alt+S | Slice on the exact frame (no keyframe snap) |
+| ← / → | Step one frame (a slice right after cuts on that exact frame) |
 | Delete | Delete selected clip (and linked pair) |
 | Ctrl+C / V | Copy range / paste |
 | Ctrl+Z / Y | Undo / redo |
