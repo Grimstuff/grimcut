@@ -169,6 +169,8 @@ type EditorState = {
   project: VideoProject | null;
   media: MediaInfo | null;
   playhead: number;
+  /** The playhead was placed by frame-stepping (arrow keys), so a cut there goes on that exact frame. */
+  exactPlayhead: boolean;
   selectedId: string | null;
   status: string;
   bgJobs: Record<string, string>;
@@ -218,10 +220,11 @@ type EditorState = {
   clearDropGhost: () => void;
   pickOpen: () => Promise<void>;
   closeProject: () => void;
-  setPlayhead: (t: number, opts?: { keepSelection?: boolean }) => number | null;
+  setPlayhead: (t: number, opts?: { keepSelection?: boolean; exact?: boolean }) => number | null;
   scrubPreview: number | null;
   setScrubPreview: (t: number | null) => void;
-  slice: (at?: number, clipId?: string) => void;
+  /** Cuts snap to a nearby keyframe unless `exact`, the playhead was frame-stepped, or the view is fully zoomed in. */
+  slice: (at?: number, clipId?: string, opts?: { exact?: boolean }) => void;
   del: () => void;
   undo: () => void;
   redo: () => void;
@@ -335,6 +338,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   project: null,
   media: null,
   playhead: 0,
+  exactPlayhead: false,
   selectedId: null,
   status: "Drop a video or File → Open…",
   busy: false,
@@ -812,20 +816,23 @@ export const useEditor = create<EditorState>((set, get) => ({
     const stays = !!cur && playhead >= cur.timelineStart - 0.001 && playhead <= clipEnd(cur) + 0.001;
     set({
       playhead,
+      exactPlayhead: !!opts?.exact,
       selectedId: opts?.keepSelection || stays ? get().selectedId : (hit?.id ?? get().selectedId),
       showBlack: isTimelineGap(p, playhead),
     });
     return mapped?.source ?? null;
   },
 
-  slice: (at, clipId) => {
+  slice: (at, clipId, opts) => {
     const p = get().project;
     if (!p) return;
     let t = at ?? get().playhead;
     const kfs = get().media?.keyframeTimes ?? [];
     const under = p.clips.find((c) => t > c.timelineStart && t < c.timelineStart + (c.sourceEnd - c.sourceStart) && c.kind === "video");
-    // Fully zoomed in, the cut goes on the exact frame under the playhead, never a nearby keyframe.
-    if (under && kfs.length && !atFullZoom(get().zoom)) {
+    // Cut on the exact frame when asked (Alt), when the playhead was frame-stepped onto it, or
+    // fully zoomed in. Otherwise snap to a nearby keyframe so the export can stream-copy.
+    const exact = !!opts?.exact || (at == null && get().exactPlayhead) || atFullZoom(get().zoom);
+    if (under && kfs.length && !exact) {
       const src = under.sourceStart + (t - under.timelineStart);
       const snapped = snapToKeyframe(src, kfs, 0.15);
       t = under.timelineStart + (snapped - under.sourceStart);

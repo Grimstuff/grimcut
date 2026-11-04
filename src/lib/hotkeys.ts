@@ -34,7 +34,8 @@ function onKey(e: KeyboardEvent) {
   }
   if (e.code === "KeyS" && !e.ctrlKey) {
     e.preventDefault();
-    st.slice();
+    // Alt+S cuts on the exact frame instead of snapping to a nearby keyframe.
+    st.slice(undefined, undefined, { exact: e.altKey });
   }
   if (e.ctrlKey && e.code === "KeyC") {
     e.preventDefault();
@@ -80,7 +81,8 @@ function onKey(e: KeyboardEvent) {
     if (st.playing) st.setPlaying(false);
     const fps = st.media?.frameRate;
     const dt = 1 / (fps && fps > 1 && fps < 240 ? fps : 30);
-    st.setPlayhead(st.playhead + (e.code === "ArrowRight" ? dt : -dt));
+    // Frame-stepping marks the playhead exact, so a cut here lands on this frame.
+    st.setPlayhead(st.playhead + (e.code === "ArrowRight" ? dt : -dt), { exact: true });
     noteUserSeek();
     syncPreviewToPlayhead();
   }

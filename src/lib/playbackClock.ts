@@ -54,7 +54,7 @@ function pullPlayheadFromVideo() {
   if (!p || !v || !Number.isFinite(v.currentTime) || v.dataset.recovering === "1") return;
   const ph = timelineFromVideoTime(p, v.currentTime);
   if (ph == null) return;
-  useEditor.setState({ playhead: ph, showBlack: false, previewOver: !!clipAt(p, ph, "video", "over") });
+  useEditor.setState({ playhead: ph, exactPlayhead: false, showBlack: false, previewOver: !!clipAt(p, ph, "video", "over") });
   if (st.playing) driveSound(p, ph, !v.paused && !v.error, st.previewVolume);
 }
 
@@ -87,7 +87,7 @@ function skipBrokenFrame(el: HTMLVideoElement): boolean {
   const p = useEditor.getState().project;
   if (p) {
     const ph = timelineFromVideoTime(p, to);
-    if (ph != null) useEditor.setState({ playhead: ph, status: `Skipped bad frame @ ${from.toFixed(1)}s` });
+    if (ph != null) useEditor.setState({ playhead: ph, exactPlayhead: false, status: `Skipped bad frame @ ${from.toFixed(1)}s` });
   }
   el.pause();
   el.removeAttribute("src");
@@ -388,7 +388,7 @@ function tick(now: number) {
     rewindToStart();
     return;
   }
-  useEditor.setState({ playhead: ph, showBlack: false, previewOver: !!clipAt(p, ph, "video", "over") });
+  useEditor.setState({ playhead: ph, exactPlayhead: false, showBlack: false, previewOver: !!clipAt(p, ph, "video", "over") });
   syncPreviewToPlayhead();
 }
 

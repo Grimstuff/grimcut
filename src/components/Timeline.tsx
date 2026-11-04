@@ -414,7 +414,7 @@ export function Timeline() {
     applyLock(null);
     const st = useEditor.getState();
     st.setRange(null);
-    st.slice();
+    st.slice(undefined, undefined, { exact: e.altKey });
   };
 
   const startBox = (kind: ClipKind, e: PointerEvent, clipId?: string) => {
