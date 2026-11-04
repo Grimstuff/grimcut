@@ -56,6 +56,9 @@ let lastClickX = 0;
 let pendingScrollLeft: number | null = null;
 let scrollerEl: HTMLDivElement | null = null;
 let holdView = false;
+/** True while the view follows the playhead during playback. Any manual scroll lets go. */
+let follow = true;
+let lastFollowX: number | null = null;
 let trackWNow = 800;
 let applyLock: (v: { pps: number; total: number } | null) => void = () => {};
 const metrics = { pps: 80, total: 1 };
@@ -81,12 +84,38 @@ export function dropClientX(physicalX: number) {
   return physicalX / dpr;
 }
 
-function scrollToPlayhead() {
-  const el = scrollerEl;
-  if (!el || useEditor.getState().zoom <= 1.001) return;
-  const x = useEditor.getState().playhead * metrics.pps + GUTTER;
-  const pad = Math.min(120, Math.max(48, el.clientWidth * 0.15));
-  el.scrollLeft = Math.max(0, x - pad);
+function releaseFollow() {
+  follow = false;
+  lastFollowX = null;
+}
+
+function engageFollow() {
+  follow = true;
+  lastFollowX = null;
+}
+
+/**
+ * Called on each playhead update while playing. Following: keep the playhead
+ * centred (easing in if it is right of centre or off-screen; if it sits left of
+ * centre it is left alone until playback carries it there). Not following: the
+ * view stays where the user put it, until the playhead plays through the centre.
+ */
+function followPlayhead(el: HTMLDivElement, x: number) {
+  const centre = el.scrollLeft + el.clientWidth / 2;
+  const prev = lastFollowX;
+  lastFollowX = x;
+  if (!follow) {
+    const visible = x >= el.scrollLeft && x <= el.scrollLeft + el.clientWidth;
+    if (visible && prev != null && prev < centre && x >= centre) follow = true;
+    else return;
+  }
+  const onScreen = x >= el.scrollLeft && x <= el.scrollLeft + el.clientWidth;
+  if (onScreen && x <= centre) return;
+  const target = x - el.clientWidth / 2;
+  const gap = target - el.scrollLeft;
+  const step = prev != null && x > prev ? x - prev : 0;
+  if (!onScreen || Math.abs(gap) <= Math.max(2, step)) el.scrollLeft = Math.max(0, target);
+  else el.scrollLeft += step + (gap - step) * 0.25;
 }
 
 function finishDrag() {
@@ -94,7 +123,6 @@ function finishDrag() {
   drag = null;
   applyLock(null);
   holdView = false;
-  if (useEditor.getState().playing) scrollToPlayhead();
   if (!d) return;
   if (d.kind === "trimL" || d.kind === "trimR") setScrubPreview(null);
   const st = useEditor.getState();
@@ -308,11 +336,17 @@ export function Timeline() {
       e.preventDefault();
       const vertical = Math.abs(e.deltaY) >= Math.abs(e.deltaX);
       if (!vertical) {
+        releaseFollow();
         el.scrollLeft += e.deltaX;
         return;
       }
-      const t = timeAt(e.clientX);
-      const xInView = e.clientX - el.getBoundingClientRect().left;
+      const st0 = useEditor.getState();
+      // While following playback, zoom around the playhead so it stays put on screen.
+      const aroundHead = st0.playing && follow;
+      const t = aroundHead ? st0.playhead : timeAt(e.clientX);
+      const xInView = aroundHead
+        ? st0.playhead * metrics.pps + GUTTER - el.scrollLeft
+        : e.clientX - el.getBoundingClientRect().left;
       const factor = e.deltaY > 0 ? 0.82 : 1.22;
       const st = useEditor.getState();
       const nextZ = Math.max(1, Math.min(256, st.zoom * factor));
@@ -353,12 +387,17 @@ export function Timeline() {
       el.scrollLeft = 0;
       return;
     }
-    if (!playing || drag || holdView) return;
-    const x = playhead * metrics.pps + GUTTER;
-    const pad = 48;
-    if (x < el.scrollLeft + pad) el.scrollLeft = Math.max(0, x - pad);
-    else if (x > el.scrollLeft + el.clientWidth - pad) el.scrollLeft = x - el.clientWidth + pad;
+    if (!playing || drag || holdView) {
+      lastFollowX = null;
+      return;
+    }
+    followPlayhead(el, playhead * metrics.pps + GUTTER);
   }, [playhead, project, fitted, playing]);
+
+  // Pressing play picks the playhead back up.
+  useEffect(() => {
+    if (playing) engageFollow();
+  }, [playing]);
 
   if (!project) return null;
 
@@ -374,10 +413,6 @@ export function Timeline() {
 
   const startBox = (kind: ClipKind, e: PointerEvent, clipId?: string) => {
     if ((e.target as HTMLElement).closest(".handle, .clip-grip, .playhead-hit, .link-btn, .av-link, .anim-key")) return;
-    if (e.button === 1) {
-      armDrag(e, { kind: "pan", startX: e.clientX, view0: scrollerEl?.scrollLeft ?? 0 });
-      return;
-    }
     if (e.button !== 0) return;
     if (isRapidSecondClick(e)) {
       sliceAtClick(e);
@@ -386,6 +421,7 @@ export function Timeline() {
     const t = timeAt(e.clientX);
     const st = useEditor.getState();
     if (st.playing) {
+      engageFollow();
       seekVideo(t);
       armDrag(e, { kind: "seek", pps, total });
       return;
@@ -537,10 +573,24 @@ export function Timeline() {
         }}
         className={`tl-scroll${fitted ? " is-fitted" : ""}`}
         onPointerDownCapture={(e) => {
+          // Middle mouse drag pans the timeline from anywhere on it.
+          if (e.button === 1) {
+            e.preventDefault();
+            releaseFollow();
+            armDrag(e, { kind: "pan", startX: e.clientX, view0: e.currentTarget.scrollLeft });
+            return;
+          }
           // Clicking anywhere on the timeline except a motion key lets go of the selected key.
           if (e.button !== 0 || (e.target as HTMLElement).closest(".anim-key")) return;
           const st = useEditor.getState();
           if (st.selectedAnimId) st.selectAnimKey(null, null);
+        }}
+        onMouseDownCapture={(e) => {
+          // Stop WebView2's middle-click autoscroll from taking over the pan.
+          if (e.button === 1) e.preventDefault();
+        }}
+        onAuxClick={(e) => {
+          if (e.button === 1) e.preventDefault();
         }}
         onPointerMove={(e) => onDragMove(e)}
         onPointerUp={() => finishDrag()}
@@ -558,6 +608,7 @@ export function Timeline() {
               sliceAtClick(e);
               return;
             }
+            engageFollow();
             seekVideo(timeAt(e.clientX));
             armDrag(e, { kind: "seek", pps, total });
           }}
@@ -604,6 +655,7 @@ function HScroll({
         if (e.button !== 0) return;
         dragging.current = true;
         holdView = true;
+        releaseFollow();
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         jump(e.clientX);
       }}
@@ -613,7 +665,6 @@ function HScroll({
       onPointerUp={() => {
         dragging.current = false;
         holdView = false;
-        if (useEditor.getState().playing) scrollToPlayhead();
       }}
     >
       <div className="tl-hscroll-thumb" style={{ width: `${thumbPct}%`, left: `${leftPct}%` }} />
