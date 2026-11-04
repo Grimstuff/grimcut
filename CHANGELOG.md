@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fully zoomed in, a cut (and dragging a clip edge) lands on the exact frame under the playhead instead of snapping to a nearby keyframe. At lower zoom cuts still snap to keyframes as before.
+
 ## 0.2.7
 
 - Clicking or dragging the playhead on the timeline now lands on whole frames (using each clip's own frame rate), so fully zoomed in the seek handle steps frame by frame instead of gliding between frames.

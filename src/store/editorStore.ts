@@ -48,6 +48,14 @@ function isMediaPath(path: string) {
   return VIDEO_RE.test(path) || AUDIO_RE.test(path);
 }
 
+/** Timeline zoom is a scale over "whole timeline fits the track"; this is the most it goes in. */
+export const MAX_ZOOM = 256;
+
+/** At full zoom edits land on exact frames instead of snapping to keyframes. */
+export function atFullZoom(zoom: number): boolean {
+  return zoom >= MAX_ZOOM - 1e-6;
+}
+
 function mediaHasVideo(m: Pick<MediaInfo, "width" | "height" | "videoCodec">) {
   return (m.width ?? 0) > 8 && (m.height ?? 0) > 8;
 }
@@ -816,7 +824,8 @@ export const useEditor = create<EditorState>((set, get) => ({
     let t = at ?? get().playhead;
     const kfs = get().media?.keyframeTimes ?? [];
     const under = p.clips.find((c) => t > c.timelineStart && t < c.timelineStart + (c.sourceEnd - c.sourceStart) && c.kind === "video");
-    if (under && kfs.length) {
+    // Fully zoomed in, the cut goes on the exact frame under the playhead, never a nearby keyframe.
+    if (under && kfs.length && !atFullZoom(get().zoom)) {
       const src = under.sourceStart + (t - under.timelineStart);
       const snapped = snapToKeyframe(src, kfs, 0.15);
       t = under.timelineStart + (snapped - under.sourceStart);
@@ -965,7 +974,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const clip = src.clips.find((c) => c.id === id);
     if (!clip) return;
     const kfs = get().media?.keyframeTimes ?? [];
-    let snapped = snapToKeyframe(sourceEdge, kfs, snapSec);
+    let snapped = atFullZoom(get().zoom) ? sourceEdge : snapToKeyframe(sourceEdge, kfs, snapSec);
     const ignore = new Set<string>([id]);
     if (clip.linkGroup) {
       for (const c of src.clips) if (c.linkGroup === clip.linkGroup) ignore.add(c.id);
@@ -1175,7 +1184,7 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setZoom: (z, anchorTime) => {
     // zoom is a scale over "fit entire timeline in the track". 1 = full width.
-    const zoom = Math.max(1, Math.min(256, z));
+    const zoom = Math.max(1, Math.min(MAX_ZOOM, z));
     const p = get().project;
     if (!p) {
       set({ zoom });

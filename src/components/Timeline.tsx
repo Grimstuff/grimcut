@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from 
 import { clipDuration, clipEffects, clipEnd, formatTime, MIN_CLIP, type Clip, type ClipKind, type ClipSpan } from "../core/types";
 import { clipSourcePath, clipsOn, partner, rulerDuration, snapToFrame } from "../core/project";
 import { collectLaneSpans, extractSpans } from "../core/edits";
-import { useEditor } from "../store/editorStore";
+import { MAX_ZOOM, useEditor } from "../store/editorStore";
 import { Waveform } from "./Waveform";
 import { Filmstrip } from "./Filmstrip";
 import { startHotkeys } from "../lib/hotkeys";
@@ -355,7 +355,7 @@ export function Timeline() {
         : e.clientX - el.getBoundingClientRect().left;
       const factor = e.deltaY > 0 ? 0.82 : 1.22;
       const st = useEditor.getState();
-      const nextZ = Math.max(1, Math.min(256, st.zoom * factor));
+      const nextZ = Math.max(1, Math.min(MAX_ZOOM, st.zoom * factor));
       const newPps = (trackWNow / Math.max(metrics.total, 0.1)) * nextZ;
       pendingScrollLeft = Math.max(0, t * newPps + GUTTER - xInView);
       st.setZoom(nextZ, t);
