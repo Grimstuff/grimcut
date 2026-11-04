@@ -1238,6 +1238,7 @@ fn run_filtered_encode(
     ffmpeg: &Path,
     plan: &ExportPlan,
     inputs: &[String],
+    seeked: &[(String, f64)],
     filter_arg: &str,
     work: &Path,
     fps: f64,
@@ -1254,12 +1255,20 @@ fn run_filtered_encode(
         let label = format!("Encoding {}…", enc.label);
         emit_prog(app, &label, 0.0);
         let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
-        for inp in inputs {
+        let all = inputs
+            .iter()
+            .map(|p| (p, 0.0))
+            .chain(seeked.iter().map(|(p, ss)| (p, *ss)));
+        for (inp, ss) in all {
             let lower = inp.to_ascii_lowercase();
             if lower.ends_with(".webm") {
                 // libvpx keeps VP8/VP9 WebM alpha (alpha_mode=1). Native decode often drops it.
                 args.push("-c:v".into());
                 args.push("libvpx-vp9".into());
+            }
+            if ss > 0.0 {
+                args.push("-ss".into());
+                args.push(format!("{ss:.6}"));
             }
             args.push("-i".into());
             args.push(inp.clone());
@@ -2085,6 +2094,31 @@ fn append_audio_mix(fc: &mut String, inputs: &[String], plan: &ExportPlan) {
     }
 }
 
+/// Gives a video segment that starts later in its source its own input,
+/// opened with `-ss` so FFmpeg jumps there instead of decoding (and burning
+/// subtitles into) everything before the in-point. Without this a cut that
+/// starts 20 minutes in sits at 0% while FFmpeg chews through those minutes.
+/// The seeked input's timestamps start at 0, so they are shifted back to
+/// source time first: burned subtitles and `trim` keep working unchanged.
+/// Returns the input index to use and the filter prefix to put before `trim`.
+fn seek_video_input(
+    inputs: &[String],
+    seeked: &mut Vec<(String, f64)>,
+    idx: usize,
+    path: &str,
+    start: f64,
+    sub: &str,
+) -> (usize, String) {
+    if start < SEEK_MIN_SEC {
+        return (idx, sub.to_string());
+    }
+    let n = inputs.len() + seeked.len();
+    seeked.push((path.to_string(), start));
+    (n, format!("setpts=PTS+{start:.6}/TB,{sub}"))
+}
+
+const SEEK_MIN_SEC: f64 = 2.0;
+
 fn clip_input_index(inputs: &[String], plan: &ExportPlan, clip: &ClipDto) -> usize {
     let src = clip.source_path.as_deref().unwrap_or(&plan.source_path);
     inputs.iter().position(|p| p == src).unwrap_or(0)
@@ -2186,6 +2220,7 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
         let _ = app.emit("export-progress", "Burning subtitles…");
     }
     let slices = plan.comp_slices.as_ref().unwrap();
+    let mut seeked: Vec<(String, f64)> = Vec::new();
     let mut fc = String::new();
     let mut vpads = String::new();
     for (i, slice) in slices.iter().enumerate() {
@@ -2217,6 +2252,7 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
                 String::new()
             };
             let sub = burn_prefix(&layer.source_path, &burn, plan);
+            let (idx, sub) = seek_video_input(&inputs, &mut seeked, idx, &layer.source_path, start, &sub);
             if rot.abs() > 0.05 {
                 fc.push_str(&format!(
                     "[{idx}:v]{sub}trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={dw}:{dh}:flags=bicubic,format=rgba,rotate={rad:.6}:ow=rotw(iw):oh=roth(ih):c=none{blur}[{lab}];",
@@ -2266,7 +2302,7 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
     let filter_arg = filter_path.to_string_lossy().into_owned();
-    run_filtered_encode(app, ffmpeg, plan, &inputs, &filter_arg, &work, fps)
+    run_filtered_encode(app, ffmpeg, plan, &inputs, &seeked, &filter_arg, &work, fps)
 }
 
 fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
@@ -2296,6 +2332,7 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
         let _ = app.emit("export-progress", "Burning subtitles…");
     }
 
+    let mut seeked: Vec<(String, f64)> = Vec::new();
     let mut fc = String::new();
     let mut vpads = String::new();
     for (i, clip) in plan.clips.iter().enumerate() {
@@ -2310,6 +2347,7 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
             let idx = clip_input_index(&inputs, plan, clip);
             let src = clip.source_path.as_deref().unwrap_or(&plan.source_path);
             let sub = burn_prefix(src, &burn, plan);
+            let (idx, sub) = seek_video_input(&inputs, &mut seeked, idx, src, start, &sub);
             fc.push_str(&format!(
                 "[{idx}:v]{sub}trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={w}:{h}:flags=bicubic,format=yuv420p,setsar=1[v{i}];"
             ));
@@ -2327,7 +2365,7 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
     let filter_arg = filter_path.to_string_lossy().into_owned();
-    run_filtered_encode(app, ffmpeg, plan, &inputs, &filter_arg, &work, fps)
+    run_filtered_encode(app, ffmpeg, plan, &inputs, &seeked, &filter_arg, &work, fps)
 }
 
 #[tauri::command]

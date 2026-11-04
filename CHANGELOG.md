@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: exporting a cut that starts partway into a video sat at 0% for a long time (minutes on a long episode), because FFmpeg decoded everything before the cut first. It now jumps straight to the cut, so the export starts right away. Same picture, burned subtitles included.
+- Fixed: an export could freeze for good if FFmpeg printed a lot of warnings.
+
 ## 0.2.6
 
 - The timeline no longer fights you over the horizontal scroll. During playback it keeps the playhead centred while following it, but as soon as you scroll, drag the scrollbar or pan, it stays where you put it. It picks the playhead up again when you press play, click to seek, or when playback reaches the middle of the view.
