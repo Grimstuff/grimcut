@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: exports could come out with no audio track at all while Grimcut reported a normal save (seen with long episodes cut far into the file). After every re-encode export Grimcut now checks that the file has audio when audio was expected, renders the audio on its own and adds it back if it is missing, and shows an error if it still cannot.
 - The audio waveform now fills the track height. It is scaled to each source's own loud parts instead of absolute full scale, so normal-volume recordings no longer show as a thin band, and boosting a clip or region visibly grows it (about +2 dB reaches the edges). Waveforms are read at 16-bit, so quiet audio keeps its detail.
 
 ## 0.2.6
