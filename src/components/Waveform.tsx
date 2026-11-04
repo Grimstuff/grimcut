@@ -5,6 +5,21 @@ function dbLin(db: number) {
   return Math.min(8, Math.max(0.05, 10 ** (db / 20)));
 }
 
+// The loud parts of a source (its 99th-percentile peak) sit at REF_FILL of the half-height at 0 dB, so quiet
+// stream audio still fills the lane and a +2 dB boost already pushes the peaks to the edges.
+const REF_FILL = 0.8;
+const refCache = new WeakMap<number[], number>();
+export function peakRef(peaks: number[]): number {
+  let r = refCache.get(peaks);
+  if (r === undefined) {
+    const sorted = peaks.filter((p) => p > 0).sort((a, b) => a - b);
+    r = sorted.length ? sorted[Math.floor((sorted.length - 1) * 0.99)] : 1;
+    r = Math.max(0.02, r); // near-silent sources: don't blow hiss up to full height
+    refCache.set(peaks, r);
+  }
+  return r;
+}
+
 function drawWave(
   canvas: HTMLCanvasElement,
   clip: Clip,
@@ -42,6 +57,7 @@ function drawWave(
   const t0 = (clip.sourceStart + (visL / Math.max(pr.width, 1)) * clipDur) / srcDur;
   const t1 = (clip.sourceStart + (visR / Math.max(pr.width, 1)) * clipDur) / srcDur;
   const n = peaks.length;
+  const scale = REF_FILL / peakRef(peaks);
   const mid = h / 2;
   const span = Math.max(1e-6, t1 - t0);
   for (let x = 0; x < w; x++) {
@@ -68,7 +84,7 @@ function drawWave(
         }
       }
     }
-    const amp = Math.max(0.04 * dpr, Math.min(mid - 1, peak * dbLin(db) * (mid - 1)));
+    const amp = Math.max(0.04 * dpr, Math.min(mid - 1, Math.min(1, peak * scale * dbLin(db)) * (mid - 1)));
     ctx.fillRect(x, mid - amp, 1, amp * 2);
   }
 }

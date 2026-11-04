@@ -1390,9 +1390,9 @@ fn waveform_sync(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
             "-ar",
             "4000",
             "-f",
-            "u8",
+            "s16le",
             "-acodec",
-            "pcm_u8",
+            "pcm_s16le",
             "pipe:1",
         ])
         .output()
@@ -1406,20 +1406,17 @@ fn waveform_sync(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
     }
     // Dense enough that zooming in still has a peak per pixel or two.
     const MAX: usize = 40000;
-    let bucket = (raw.len() / MAX).max(1);
-    let mut peaks = Vec::with_capacity(raw.len() / bucket + 1);
-    let mut i = 0;
-    while i < raw.len() {
-        let end = (i + bucket).min(raw.len());
-        let mut peak = 0u8;
-        for &b in &raw[i..end] {
-            let amp = b.abs_diff(128);
-            if amp > peak {
-                peak = amp;
-            }
-        }
-        peaks.push(peak as f32 / 128.0);
-        i = end;
+    // 16-bit samples: u8 left quiet speech only a step or two of resolution.
+    let n = raw.len() / 2;
+    let bucket = (n / MAX).max(1);
+    let mut peaks = Vec::with_capacity(n / bucket + 1);
+    for chunk in raw[..n * 2].chunks(bucket * 2) {
+        let peak = chunk
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        peaks.push(peak as f32 / 32768.0);
     }
     Ok(peaks)
 }
@@ -1813,12 +1810,117 @@ fn export_video_sync(app: AppHandle, mut plan: ExportPlan) -> Result<ExportResul
 
     emit_prog(&app, "Encoding…", 4.0);
     let used = export_reencode(&app, &ffmpeg, &plan)?;
+    let mut note = String::new();
+    if plan.has_audio {
+        let ffprobe = ffmpeg_bin(&app, "ffprobe");
+        if !output_has_audio(&ffprobe, &plan.output_path) {
+            // FFmpeg can finish with exit 0 yet leave the audio branch of a shared
+            // filter graph empty, and the container then drops the track silently.
+            emit_prog(&app, "Audio missing, adding it back…", 96.0);
+            restore_audio(&ffmpeg, &plan)?;
+            if !output_has_audio(&ffprobe, &plan.output_path) {
+                return Err("The export finished without an audio track and it could not be restored. The video was saved without sound.".into());
+            }
+            note = " Audio was missing from the first pass and was added back.".into();
+        }
+    }
     Ok(ExportResultDto {
         success: true,
         output_path: plan.output_path.clone(),
         mode: "reencode".into(),
         clip_count: plan.clips.len(),
-        message: format!("Saved with high-quality re-encode for clean cuts. Used {used}."),
+        message: format!("Saved with high-quality re-encode for clean cuts. Used {used}.{note}"),
+    })
+}
+
+fn output_has_audio(ffprobe: &Path, path: &str) -> bool {
+    match run_cmd(
+        ffprobe,
+        &["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", path],
+    ) {
+        Ok((stdout, _, 0)) => !stdout.trim().is_empty(),
+        // If the check itself cannot run, do not fail an otherwise good export.
+        _ => true,
+    }
+}
+
+/// Renders the timeline's audio on its own (that graph has no video branch to
+/// starve it) and muxes it into the finished video without re-encoding.
+fn restore_audio(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
+    let inputs = collect_inputs(plan);
+    let mut seeked: Vec<(String, f64)> = Vec::new();
+    let mut fc = String::new();
+    append_audio_mix(&mut fc, &inputs, &mut seeked, plan);
+    if fc.is_empty() {
+        return Err("No audio to restore.".into());
+    }
+    let out = PathBuf::from(&plan.output_path);
+    let ext = out.extension().and_then(|e| e.to_str()).unwrap_or("mp4").to_string();
+    let audio_tmp = out.with_extension("grimcut-audio.m4a");
+    let muxed = out.with_extension(format!("grimcut-fix.{ext}"));
+    let audio_br = plan.audio_bitrate.as_deref().unwrap_or("192k");
+
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
+    for inp in &inputs {
+        args.push("-i".into());
+        args.push(inp.clone());
+    }
+    for (inp, ss) in &seeked {
+        args.push("-ss".into());
+        args.push(format!("{ss:.6}"));
+        args.push("-i".into());
+        args.push(inp.clone());
+    }
+    args.extend([
+        "-filter_complex".into(),
+        fc,
+        "-map".into(),
+        "[aout]".into(),
+        "-vn".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        audio_br.into(),
+        audio_tmp.to_string_lossy().into_owned(),
+    ]);
+    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let (_, err, code) = run_cmd(ffmpeg, &refs)?;
+    if code != 0 {
+        let _ = fs::remove_file(&audio_tmp);
+        return Err(trim_ffmpeg_err(&err));
+    }
+
+    let mut mux: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-y".into(),
+        "-i".into(),
+        plan.output_path.clone(),
+        "-i".into(),
+        audio_tmp.to_string_lossy().into_owned(),
+        "-map".into(),
+        "0:v:0".into(),
+        "-map".into(),
+        "1:a:0".into(),
+        "-c".into(),
+        "copy".into(),
+        "-map_chapters".into(),
+        "-1".into(),
+    ];
+    for f in mp4_copy_flags(&plan.output_path) {
+        mux.push(f.into());
+    }
+    mux.push(muxed.to_string_lossy().into_owned());
+    let refs: Vec<&str> = mux.iter().map(|s| s.as_str()).collect();
+    let res = run_cmd(ffmpeg, &refs);
+    let _ = fs::remove_file(&audio_tmp);
+    let (_, err, code) = res?;
+    if code != 0 {
+        let _ = fs::remove_file(&muxed);
+        return Err(trim_ffmpeg_err(&err));
+    }
+    fs::rename(&muxed, &plan.output_path).map_err(|e| {
+        let _ = fs::remove_file(&muxed);
+        format!("Could not replace the export with the audio-restored copy: {e}")
     })
 }
 
