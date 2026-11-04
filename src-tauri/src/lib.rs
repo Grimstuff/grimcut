@@ -1798,13 +1798,20 @@ fn export_video_sync(app: AppHandle, mut plan: ExportPlan) -> Result<ExportResul
 
     if plan.use_stream_copy && !has_gap && !plan.burn_subs {
         emit_prog(&app, "Stream copy…", 40.0);
-        export_copy(&ffmpeg, &plan)?;
+        let audio_args = if plan.has_audio {
+            let codec = source_audio_codec(&ffmpeg_bin(&app, "ffprobe"), &plan.source_path);
+            copy_audio_args(codec.as_deref(), &plan.output_path, plan.audio_bitrate.as_deref())
+        } else {
+            Vec::new()
+        };
+        export_copy(&ffmpeg, &plan, &audio_args)?;
+        let audio_note = if audio_args.is_empty() { "" } else { " Audio was converted to AAC so it plays everywhere." };
         return Ok(ExportResultDto {
             success: true,
             output_path: plan.output_path.clone(),
             mode: "stream-copy".into(),
             clip_count: plan.clips.len(),
-            message: "Saved with stream copy — cut(s) landed on keyframes.".into(),
+            message: format!("Saved with stream copy — cut(s) landed on keyframes.{audio_note}"),
         });
     }
 
@@ -1937,8 +1944,46 @@ fn mp4_copy_flags(dest: &str) -> Vec<&'static str> {
     }
 }
 
-fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
-    if plan.clips.len() == 1 {
+/// Codec of the first audio stream, the one stream copy maps.
+fn source_audio_codec(ffprobe: &Path, path: &str) -> Option<String> {
+    let (stdout, _, code) = run_cmd(
+        ffprobe,
+        &["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
+    )
+    .ok()?;
+    let codec = stdout.trim();
+    (code == 0 && !codec.is_empty()).then(|| codec.to_string())
+}
+
+/// Extra arguments for a stream-copy export. MP4 can carry E-AC-3, AC-3, DTS and
+/// similar, but most players, browsers and apps then play it silently, so those
+/// become stereo AAC like a re-encode export. The video is still copied.
+fn copy_audio_args(codec: Option<&str>, dest: &str, bitrate: Option<&str>) -> Vec<String> {
+    let ext = Path::new(dest)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let lower = codec.map(|c| c.to_ascii_lowercase());
+    let plays_everywhere = matches!(lower.as_deref(), None | Some("aac" | "mp3"));
+    if plays_everywhere || !matches!(ext.as_str(), "mp4" | "m4v" | "mov") {
+        return Vec::new();
+    }
+    vec![
+        "-c:a".into(),
+        "aac".into(),
+        "-ac".into(),
+        "2".into(),
+        "-b:a".into(),
+        bitrate.unwrap_or("192k").into(),
+    ]
+}
+
+fn export_copy(ffmpeg: &Path, plan: &ExportPlan, audio_args: &[String]) -> Result<(), String> {
+    // Audio that needs converting always takes the two-step route below. -ss can
+    // land before the cut; copied video keeps that lead-in, but audio encoded in
+    // the same pass is trimmed to the exact time and would start late.
+    if plan.clips.len() == 1 && audio_args.is_empty() {
         let src = plan.clips[0]
             .source_path
             .as_deref()
@@ -1994,6 +2039,7 @@ fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
     ];
     if plan.has_audio {
         args.extend(["-map".into(), "0:a:0".into()]);
+        args.extend_from_slice(audio_args);
     }
     hevc_tag(plan.video_codec.as_deref(), &plan.output_path, &mut args);
     for f in mp4_copy_flags(&plan.output_path) {
@@ -2748,5 +2794,20 @@ mod tests {
         assert!(!is_quarter_turn(&json!({})));
         assert!(!is_quarter_turn(&json!({ "side_data_list": [{ "rotation": 180 }] })));
         assert!(!is_quarter_turn(&json!({ "side_data_list": [{ "side_data_type": "CPB" }] })));
+    }
+
+    #[test]
+    fn stream_copy_turns_eac3_in_mp4_into_aac() {
+        let args = copy_audio_args(Some("eac3"), "E:\\out\\cut.mp4", Some("256k"));
+        assert_eq!(args, ["-c:a", "aac", "-ac", "2", "-b:a", "256k"]);
+        assert_eq!(copy_audio_args(Some("ac3"), "cut.MOV", None).last().unwrap(), "192k");
+    }
+
+    #[test]
+    fn stream_copy_keeps_audio_that_already_plays() {
+        assert!(copy_audio_args(Some("aac"), "cut.mp4", None).is_empty());
+        assert!(copy_audio_args(Some("mp3"), "cut.mp4", None).is_empty());
+        assert!(copy_audio_args(Some("eac3"), "cut.mkv", None).is_empty());
+        assert!(copy_audio_args(None, "cut.mp4", None).is_empty());
     }
 }
