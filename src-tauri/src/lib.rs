@@ -1249,28 +1249,45 @@ fn run_filtered_encode(
     }
     let audio_br = plan.audio_bitrate.as_deref().unwrap_or("192k");
     let dur = plan_secs(plan).max(0.05);
+    // Only WebMs that really carry an alpha layer get the libvpx decoder;
+    // everything else uses FFmpeg's native VP8/VP9 decoder, which accepts
+    // streams libvpx rejects ("Invalid frame size in index").
+    let ffprobe = ffmpeg_bin(app, "ffprobe");
+    let all: Vec<(&String, f64)> = inputs
+        .iter()
+        .map(|p| (p, 0.0))
+        .chain(seeked.iter().map(|(p, ss)| (p, *ss)))
+        .collect();
+    let mut alpha_dec: std::collections::HashMap<String, Option<&'static str>> =
+        std::collections::HashMap::new();
+    for (inp, _) in &all {
+        if !alpha_dec.contains_key(inp.as_str()) {
+            alpha_dec.insert((*inp).clone(), vpx_alpha_decoder(&ffprobe, inp));
+        }
+    }
+    let mut use_libvpx = alpha_dec.values().any(|d| d.is_some());
     let mut last_err = String::from("encode failed");
-    for (i, enc) in attempts.iter().enumerate() {
+    let mut i = 0;
+    while i < attempts.len() {
+        let enc = &attempts[i];
         let label = format!("Encoding {}…", enc.label);
         emit_prog(app, &label, 0.0);
         let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
-        let all = inputs
-            .iter()
-            .map(|p| (p, 0.0))
-            .chain(seeked.iter().map(|(p, ss)| (p, *ss)));
-        for (inp, ss) in all {
-            let lower = inp.to_ascii_lowercase();
-            if lower.ends_with(".webm") {
-                // libvpx keeps VP8/VP9 WebM alpha (alpha_mode=1). Native decode often drops it.
-                args.push("-c:v".into());
-                args.push("libvpx-vp9".into());
+        for (inp, ss) in &all {
+            if use_libvpx {
+                if let Some(dec) = alpha_dec.get(inp.as_str()).copied().flatten() {
+                    // libvpx keeps VP8/VP9 WebM alpha (alpha_mode=1); the native
+                    // decoder drops it.
+                    args.push("-c:v".into());
+                    args.push(dec.into());
+                }
             }
-            if ss > 0.0 {
+            if *ss > 0.0 {
                 args.push("-ss".into());
                 args.push(format!("{ss:.6}"));
             }
             args.push("-i".into());
-            args.push(inp.clone());
+            args.push((*inp).clone());
         }
         args.extend([
             "-/filter_complex".into(),
@@ -1306,15 +1323,79 @@ fn run_filtered_encode(
             let _ = fs::remove_dir_all(work);
             return Err(last_err);
         }
+        if use_libvpx && is_decoder_failure(&err) {
+            // The encoder never got a frame, so trying the next one would fail
+            // the same way. Retry this encoder with the native decoder instead
+            // (transparency is lost, the export is not).
+            use_libvpx = false;
+            emit_prog(
+                app,
+                "WebM alpha decode failed, retrying without transparency…",
+                0.0,
+            );
+            continue;
+        }
         let next = attempts.get(i + 1).map(|e| e.label).unwrap_or("give up");
         emit_prog(
             app,
             &format!("{} failed, encoding with {next}…", enc.label),
             0.0,
         );
+        i += 1;
     }
     let _ = fs::remove_dir_all(work);
     Err(last_err)
+}
+
+/// The libvpx decoder to force for a WebM whose first video stream has an
+/// alpha layer, or None to let FFmpeg pick its native decoder.
+fn vpx_alpha_decoder(ffprobe: &Path, path: &str) -> Option<&'static str> {
+    if !path.to_ascii_lowercase().ends_with(".webm") {
+        return None;
+    }
+    let (stdout, _, code) = run_cmd(
+        ffprobe,
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name:stream_tags",
+            "-of",
+            "json",
+            path,
+        ],
+    )
+    .ok()?;
+    if code != 0 {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(&stdout).ok()?;
+    vpx_alpha_decoder_from_probe(&v["streams"][0])
+}
+
+fn vpx_alpha_decoder_from_probe(stream: &serde_json::Value) -> Option<&'static str> {
+    let alpha = stream["tags"]
+        .as_object()?
+        .iter()
+        .any(|(k, val)| k.eq_ignore_ascii_case("alpha_mode") && val.as_str().map(str::trim) == Some("1"));
+    if !alpha {
+        return None;
+    }
+    match stream["codec_name"].as_str()? {
+        "vp9" => Some("libvpx-vp9"),
+        "vp8" => Some("libvpx"),
+        _ => None,
+    }
+}
+
+fn is_decoder_failure(stderr: &str) -> bool {
+    let l = stderr.to_ascii_lowercase();
+    l.contains("failed to decode frame")
+        || l.contains("error submitting packet to decoder")
+        || l.contains("decode error rate")
+        || l.contains("[dec:libvpx")
 }
 
 fn encoder_smoke_test(ffmpeg: &Path, args: &[&str]) -> bool {
@@ -2727,6 +2808,37 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn libvpx_forced_only_for_alpha_webm() {
+        let j = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+        assert_eq!(
+            vpx_alpha_decoder_from_probe(&j(r#"{"codec_name":"vp9","tags":{"alpha_mode":"1"}}"#)),
+            Some("libvpx-vp9")
+        );
+        assert_eq!(
+            vpx_alpha_decoder_from_probe(&j(r#"{"codec_name":"vp8","tags":{"ALPHA_MODE":"1"}}"#)),
+            Some("libvpx")
+        );
+        assert_eq!(
+            vpx_alpha_decoder_from_probe(&j(r#"{"codec_name":"vp9","tags":{"ENCODER":"x"}}"#)),
+            None
+        );
+        assert_eq!(vpx_alpha_decoder_from_probe(&j(r#"{"codec_name":"vp9"}"#)), None);
+        assert_eq!(
+            vpx_alpha_decoder_from_probe(&j(r#"{"codec_name":"av1","tags":{"alpha_mode":"1"}}"#)),
+            None
+        );
+    }
+
+    #[test]
+    fn detects_libvpx_decode_failure() {
+        assert!(is_decoder_failure(
+            "[libvpx-vp9 @ 0x1] Failed to decode frame: Bitstream not supported by this decoder\n\
+             [vist#0:1/vp9 @ 0x2] [dec:libvpx-vp9 @ 0x3] Error submitting packet to decoder"
+        ));
+        assert!(!is_decoder_failure("[h264_amf @ 0x1] Init error 5"));
+    }
     use serde_json::json;
 
     #[test]
