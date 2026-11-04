@@ -1364,9 +1364,9 @@ fn waveform_sync(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
             "-ar",
             "4000",
             "-f",
-            "u8",
+            "s16le",
             "-acodec",
-            "pcm_u8",
+            "pcm_s16le",
             "pipe:1",
         ])
         .output()
@@ -1380,20 +1380,17 @@ fn waveform_sync(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
     }
     // Dense enough that zooming in still has a peak per pixel or two.
     const MAX: usize = 40000;
-    let bucket = (raw.len() / MAX).max(1);
-    let mut peaks = Vec::with_capacity(raw.len() / bucket + 1);
-    let mut i = 0;
-    while i < raw.len() {
-        let end = (i + bucket).min(raw.len());
-        let mut peak = 0u8;
-        for &b in &raw[i..end] {
-            let amp = b.abs_diff(128);
-            if amp > peak {
-                peak = amp;
-            }
-        }
-        peaks.push(peak as f32 / 128.0);
-        i = end;
+    // 16-bit samples: u8 left quiet speech only a step or two of resolution.
+    let n = raw.len() / 2;
+    let bucket = (n / MAX).max(1);
+    let mut peaks = Vec::with_capacity(n / bucket + 1);
+    for chunk in raw[..n * 2].chunks(bucket * 2) {
+        let peak = chunk
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        peaks.push(peak as f32 / 32768.0);
     }
     Ok(peaks)
 }

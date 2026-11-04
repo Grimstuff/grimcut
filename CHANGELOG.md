@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The audio waveform now fills the track height. It is scaled to each source's own loud parts instead of absolute full scale, so normal-volume recordings no longer show as a thin band, and boosting a clip or region visibly grows it (about +2 dB reaches the edges). Waveforms are read at 16-bit, so quiet audio keeps its detail.
+
 ## 0.2.6
 
 - The timeline no longer fights you over the horizontal scroll. During playback it keeps the playhead centred while following it, but as soon as you scroll, drag the scrollbar or pan, it stays where you put it. It picks the playhead up again when you press play, click to seek, or when playback reaches the middle of the view.
