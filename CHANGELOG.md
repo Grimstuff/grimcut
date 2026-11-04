@@ -2,12 +2,15 @@
 
 ## Unreleased
 
-## 0.2.6
+## 0.2.7
 
 - Fixed: exporting a cut that starts partway into a video sat at 0% for a long time (minutes on a long episode), because FFmpeg decoded everything before the cut first. It now jumps straight to the cut, so the export starts right away. Same picture, burned subtitles included.
 - Fixed: an export could freeze for good if FFmpeg printed a lot of warnings.
 - Fixed: exports could come out with no audio track at all while Grimcut reported a normal save (seen with long episodes cut far into the file). After every re-encode export Grimcut now checks that the file has audio when audio was expected, renders the audio on its own and adds it back if it is missing, and shows an error if it still cannot.
 - The audio waveform now fills the track height. It is scaled to each source's own loud parts instead of absolute full scale, so normal-volume recordings no longer show as a thin band, and boosting a clip or region visibly grows it (about +2 dB reaches the edges). Waveforms are read at 16-bit, so quiet audio keeps its detail.
+
+## 0.2.6
+
 - The timeline no longer fights you over the horizontal scroll. During playback it keeps the playhead centred while following it, but as soon as you scroll, drag the scrollbar or pan, it stays where you put it. It picks the playhead up again when you press play, click to seek, or when playback reaches the middle of the view.
 - Middle mouse drag pans the timeline from anywhere on it, including over clips, handles and the playhead.
 - The move bar on main-track clips now sits at the bottom of the clip, so an overlay (2nd layer) above it no longer covers it. Overlay clips keep theirs at the top.
