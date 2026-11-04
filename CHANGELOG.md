@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.9
 
 - You can now cut on the exact frame even when a keyframe is a frame or two away. Step to the frame with ← / → and press S, or press Alt+S (or Alt+double-click) anywhere. Plain S and double-click after clicking or dragging still snap to a nearby keyframe so exports can stream-copy.
 
