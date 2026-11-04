@@ -42,7 +42,9 @@ env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ??= "";
 // The tag must point at the commit that was built, so publish only clean, pushed work.
 let commit = "";
 if (publish) {
-  if (git("status --porcelain --untracked-files=no")) fail("Commit your changes before --publish.");
+  // Building rewrites src-tauri/Cargo.toml with CRLF line endings on Windows,
+  // so ignore changes that are only line endings.
+  if (dirtyFiles().length) fail(`Commit your changes before --publish: ${dirtyFiles().join(", ")}`);
   commit = git("rev-parse HEAD");
   if (!git(`branch -r --contains ${commit}`)) fail("Push this commit before --publish.");
 }
@@ -95,6 +97,18 @@ execSync(
   { cwd: root, stdio: "inherit" },
 );
 console.log(`\nPublished ${tag}. Installed copies find it with Check for updates.`);
+
+function dirtyFiles() {
+  const listed = git("diff HEAD --name-only").split("\n").filter(Boolean);
+  return listed.filter((f) => {
+    try {
+      execSync(`git diff HEAD --ignore-cr-at-eol --quiet -- ${JSON.stringify(f)}`, { cwd: root, stdio: "ignore" });
+      return false;
+    } catch {
+      return true;
+    }
+  });
+}
 
 function git(args) {
   return execSync(`git ${args}`, { cwd: root, encoding: "utf8" }).trim();
