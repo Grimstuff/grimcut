@@ -396,9 +396,8 @@ fn run_ffmpeg_progress(
         *JOB.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
     }
     // Drain stderr on its own thread. Reading it only after stdout closes
-    // deadlocks once FFmpeg fills the stderr pipe (AMF logs warnings per
-    // frame): FFmpeg blocks on stderr, stops writing progress, and the
-    // export sits at 0% forever.
+    // would deadlock if FFmpeg ever filled the stderr pipe (lots of
+    // warnings): it would block on stderr and stop writing progress.
     let stderr_reader = stderr_pipe.map(|s| {
         std::thread::spawn(move || {
             let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
@@ -2034,6 +2033,7 @@ fn collect_inputs(plan: &ExportPlan) -> Vec<String> {
 fn append_audio_concat(
     fc: &mut String,
     inputs: &[String],
+    seeked: &mut Vec<(String, f64)>,
     plan: &ExportPlan,
     clips: &[ClipDto],
     out: &str,
@@ -2050,13 +2050,16 @@ fn append_audio_concat(
             let start = clip.source_start.max(0.0);
             let end = clip.source_end.max(start + 0.02);
             let idx = clip_input_index(inputs, plan, clip);
+            let src = clip.source_path.as_deref().unwrap_or(&plan.source_path);
+            let (idx, shift) = seek_input(inputs, seeked, idx, src, start);
+            let shift = shift.map(|s| format!("asetpts=PTS+{s:.6}/TB,")).unwrap_or_default();
             let gain = if clip.gain_db.abs() > 0.05 {
                 format!(",volume={:.2}dB", clip.gain_db)
             } else {
                 String::new()
             };
             fc.push_str(&format!(
-                "[{idx}:a]atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{gain}[{lab}];"
+                "[{idx}:a]{shift}atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{gain}[{lab}];"
             ));
         }
         pads.push_str(&format!("[{lab}]"));
@@ -2064,7 +2067,12 @@ fn append_audio_concat(
     fc.push_str(&format!("{}concat=n={}:v=0:a=1[{out}];", pads, clips.len()));
 }
 
-fn append_audio_mix(fc: &mut String, inputs: &[String], plan: &ExportPlan) {
+fn append_audio_mix(
+    fc: &mut String,
+    inputs: &[String],
+    seeked: &mut Vec<(String, f64)>,
+    plan: &ExportPlan,
+) {
     if !plan.has_audio {
         if fc.ends_with(';') {
             fc.pop();
@@ -2083,24 +2091,47 @@ fn append_audio_mix(fc: &mut String, inputs: &[String], plan: &ExportPlan) {
         .as_ref()
         .filter(|v| v.iter().any(|c| !c.gap));
     if let Some(over) = over {
-        append_audio_concat(fc, inputs, plan, base, "ab");
-        append_audio_concat(fc, inputs, plan, over, "ao");
+        append_audio_concat(fc, inputs, seeked, plan, base, "ab");
+        append_audio_concat(fc, inputs, seeked, plan, over, "ao");
         fc.push_str("[ab][ao]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]");
     } else {
-        append_audio_concat(fc, inputs, plan, base, "aout");
+        append_audio_concat(fc, inputs, seeked, plan, base, "aout");
         if fc.ends_with(';') {
             fc.pop();
         }
     }
 }
 
-/// Gives a video segment that starts later in its source its own input,
-/// opened with `-ss` so FFmpeg jumps there instead of decoding (and burning
-/// subtitles into) everything before the in-point. Without this a cut that
-/// starts 20 minutes in sits at 0% while FFmpeg chews through those minutes.
-/// The seeked input's timestamps start at 0, so they are shifted back to
-/// source time first: burned subtitles and `trim` keep working unchanged.
-/// Returns the input index to use and the filter prefix to put before `trim`.
+/// Gives a segment that starts later in its source its own input, opened
+/// with `-ss` so FFmpeg jumps there instead of reading and decoding (and
+/// burning subtitles into) everything before the in-point. Without this a cut
+/// that starts 30 minutes in sits at 0% while FFmpeg chews through those
+/// minutes. Video and audio of the same cut share one seeked input.
+/// Returns the input index to use and, for a seeked input, the in-point:
+/// its timestamps start at 0, so the filter shifts them back to source time
+/// first and burned subtitles and `trim` keep working unchanged.
+fn seek_input(
+    inputs: &[String],
+    seeked: &mut Vec<(String, f64)>,
+    idx: usize,
+    path: &str,
+    start: f64,
+) -> (usize, Option<f64>) {
+    if start < SEEK_MIN_SEC {
+        return (idx, None);
+    }
+    let pos = match seeked.iter().position(|(p, ss)| p == path && (ss - start).abs() < 1e-6) {
+        Some(k) => k,
+        None => {
+            seeked.push((path.to_string(), start));
+            seeked.len() - 1
+        }
+    };
+    (inputs.len() + pos, Some(start))
+}
+
+/// `seek_input` for a video segment: also returns the filter prefix to put
+/// before `trim` (timestamp shift, then any subtitle burn).
 fn seek_video_input(
     inputs: &[String],
     seeked: &mut Vec<(String, f64)>,
@@ -2109,12 +2140,10 @@ fn seek_video_input(
     start: f64,
     sub: &str,
 ) -> (usize, String) {
-    if start < SEEK_MIN_SEC {
-        return (idx, sub.to_string());
+    match seek_input(inputs, seeked, idx, path, start) {
+        (n, Some(s)) => (n, format!("setpts=PTS+{s:.6}/TB,{sub}")),
+        (n, None) => (n, sub.to_string()),
     }
-    let n = inputs.len() + seeked.len();
-    seeked.push((path.to_string(), start));
-    (n, format!("setpts=PTS+{start:.6}/TB,{sub}"))
 }
 
 const SEEK_MIN_SEC: f64 = 2.0;
@@ -2297,7 +2326,7 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
         slices.len()
     ));
 
-    append_audio_mix(&mut fc, &inputs, plan);
+    append_audio_mix(&mut fc, &inputs, &mut seeked, plan);
 
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
@@ -2360,7 +2389,7 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
         plan.clips.len()
     ));
 
-    append_audio_mix(&mut fc, &inputs, plan);
+    append_audio_mix(&mut fc, &inputs, &mut seeked, plan);
 
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
