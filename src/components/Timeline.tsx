@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { clipDuration, clipEffects, clipEnd, formatTime, MIN_CLIP, type Clip, type ClipKind, type ClipSpan } from "../core/types";
-import { clipsOn, partner, rulerDuration } from "../core/project";
+import { clipSourcePath, clipsOn, partner, rulerDuration, snapToFrame } from "../core/project";
 import { collectLaneSpans, extractSpans } from "../core/edits";
 import { useEditor } from "../store/editorStore";
 import { Waveform } from "./Waveform";
@@ -36,9 +36,15 @@ type Drag =
       seedIds?: string[];
     };
 
+/** Mouse seeks land on whole frames, so at full zoom the playhead steps frame by frame. */
 function seekVideo(t: number) {
   noteUserSeek();
-  useEditor.getState().setPlayhead(t);
+  const st = useEditor.getState();
+  const p = st.project;
+  const at = p
+    ? snapToFrame(p, t, (c) => st.mediaByPath[clipSourcePath(p, c)]?.frameRate, st.media?.frameRate)
+    : t;
+  st.setPlayhead(at);
   syncPreviewToPlayhead();
 }
 
