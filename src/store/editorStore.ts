@@ -152,7 +152,8 @@ function loadAudioTrack(
   const n = tracks.findIndex((t) => t.index === index);
   const label = n >= 0 ? audioTrackLabel(tracks[n], n) : `stream ${index}`;
   startJob(get, set, `atrack:${path}`, "audio track");
-  void invoke<string>("make_audio_proxy", { path, stream: index })
+  if (announce) set({ status: `Preparing audio track ${label}…` });
+  void invoke<string>("make_audio_proxy", { path, stream: index, codec: n >= 0 ? tracks[n].codec : null })
     .then((file) => {
       if (!current()) return;
       set({

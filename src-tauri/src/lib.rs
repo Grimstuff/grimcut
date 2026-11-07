@@ -1894,11 +1894,23 @@ fn make_proxy_sync(app: AppHandle, path: String, video_codec: Option<String>) ->
 /// Preview sound for one chosen audio stream (e.g. a dub that is not the
 /// file's first track): decoded to a cached stereo m4a the preview plays.
 #[tauri::command]
-async fn make_audio_proxy(app: AppHandle, path: String, stream: i32) -> Result<String, String> {
-    off_thread(move || make_audio_proxy_sync(app, path, stream)).await
+async fn make_audio_proxy(app: AppHandle, path: String, stream: i32, codec: Option<String>) -> Result<String, String> {
+    off_thread(move || make_audio_proxy_sync(app, path, stream, codec)).await
 }
 
-fn make_audio_proxy_sync(app: AppHandle, path: String, stream: i32) -> Result<String, String> {
+/// Container the webview can play a stream-copied track in, for codecs it
+/// decodes itself. Others (AC-3, E-AC-3, DTS, TrueHD…) get re-encoded.
+fn audio_copy_ext(codec: &str) -> Option<&'static str> {
+    match codec.to_ascii_lowercase().as_str() {
+        "aac" => Some("m4a"),
+        "mp3" => Some("mp3"),
+        "opus" | "vorbis" => Some("ogg"),
+        "flac" => Some("flac"),
+        _ => None,
+    }
+}
+
+fn make_audio_proxy_sync(app: AppHandle, path: String, stream: i32, codec: Option<String>) -> Result<String, String> {
     let ffmpeg = ffmpeg_bin(&app, "ffmpeg");
     let stem = Path::new(&path)
         .file_stem()
@@ -1914,31 +1926,46 @@ fn make_audio_proxy_sync(app: AppHandle, path: String, stream: i32) -> Result<St
     for b in path.to_ascii_lowercase().bytes() {
         h = (h ^ b as u64).wrapping_mul(1099511628211);
     }
-    let out = std::env::temp_dir().join(format!("grimcut-px-a{stream}-{stem}-{:08x}.m4a", h as u32));
-    let fresh = || match (fs::metadata(&path), fs::metadata(&out)) {
+    let base = format!("grimcut-px-a{stream}-{stem}-{:08x}", h as u32);
+    let fresh = |out: &Path| match (fs::metadata(&path), fs::metadata(out)) {
         (Ok(src), Ok(dst)) => dst.len() > 400 && dst.modified().ok() >= src.modified().ok(),
         _ => false,
     };
-    if fresh() {
-        return Ok(out.to_string_lossy().into_owned());
-    }
-    let _ = app.emit("export-progress", "Preparing audio track…");
-    let out_s = out.to_string_lossy().into_owned();
     let map = format!("0:{stream}");
-    let args = [
-        "-hide_banner", "-y", "-i", &path, "-map", &map, "-vn", "-sn", "-dn", "-c:a", "aac", "-b:a",
-        "160k", "-ac", "2", &out_s,
-    ];
-    let (_, err, code) = run_cmd(&ffmpeg, &args)?;
-    if code != 0 || !fresh() {
-        let _ = fs::remove_file(&out);
-        return Err(if err.trim().is_empty() {
-            "Could not prepare that audio track.".into()
+    // Copying the track only reads the file, which takes seconds; re-encoding
+    // a whole episode's track can take a minute.
+    let copy_ext = codec.as_deref().and_then(audio_copy_ext);
+    let mut last_err = String::new();
+    for copy in [true, false] {
+        let ext = match (copy, copy_ext) {
+            (true, Some(e)) => e,
+            (true, None) => continue,
+            (false, _) => "m4a",
+        };
+        let out = std::env::temp_dir().join(format!("{base}{}.{ext}", if copy { "-c" } else { "" }));
+        if fresh(&out) {
+            return Ok(out.to_string_lossy().into_owned());
+        }
+        let out_s = out.to_string_lossy().into_owned();
+        let mut args: Vec<&str> = vec!["-hide_banner", "-y", "-nostdin", "-i", &path, "-map", &map, "-vn", "-sn", "-dn"];
+        if copy {
+            args.extend(["-c:a", "copy"]);
         } else {
-            trim_ffmpeg_err(&err)
-        });
+            args.extend(["-c:a", "aac", "-b:a", "160k", "-ac", "2"]);
+        }
+        args.push(&out_s);
+        let (_, err, code) = run_cmd(&ffmpeg, &args)?;
+        if code == 0 && fresh(&out) {
+            return Ok(out_s);
+        }
+        let _ = fs::remove_file(&out);
+        last_err = err;
     }
-    Ok(out_s)
+    Err(if last_err.trim().is_empty() {
+        "Could not prepare that audio track.".into()
+    } else {
+        trim_ffmpeg_err(&last_err)
+    })
 }
 
 #[tauri::command]
