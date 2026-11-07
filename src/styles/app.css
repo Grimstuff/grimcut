@@ -1344,6 +1344,16 @@ html.is-live-resize body {
   cursor: pointer;
 }
 
+.tb-aud-tracks {
+  max-width: 240px;
+  max-height: 180px;
+}
+
+.tb-aud-tracks button {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tb-sub-tracks button:hover {
   background: var(--gp-accent-soft);
 }
