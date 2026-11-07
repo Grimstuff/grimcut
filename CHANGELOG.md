@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.11
 
 - Audio track picker: when a video has more than one audio track (for example the original language plus an English dub), an "A1" button appears next to CC. Pick a track there and the preview plays it, the waveform shows it, and the export uses it (stream copy and re-encode). Other files on the timeline keep their first track.
 
