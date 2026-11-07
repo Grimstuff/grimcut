@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.12
 
 - Fixed: switching to another audio track left the app stuck on a 23% progress bar and locked. The track now prepares in the background, and AAC, MP3, Opus, Vorbis and FLAC tracks are copied instead of re-encoded, so switching takes seconds instead of up to a minute on a long episode.
 
