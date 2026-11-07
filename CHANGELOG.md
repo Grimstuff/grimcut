@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Audio track picker: when a video has more than one audio track (for example the original language plus an English dub), an "A1" button appears next to CC. Pick a track there and the preview plays it, the waveform shows it, and the export uses it (stream copy and re-encode). Other files on the timeline keep their first track.
+
 ## 0.2.10
 
 - Fixed: exporting some WebM (VP9) videos failed with "Invalid frame size in index" / "Conversion failed!". Grimcut forced FFmpeg's libvpx decoder on every WebM; it now does that only for WebMs that really have a transparent (alpha) layer, and if libvpx still can't read one it retries without transparency instead of failing.

@@ -97,7 +97,33 @@ export type MediaInfo = {
   hasAudio: boolean;
   keyframeTimes: number[];
   subtitles?: SubtitleTrack[];
+  audioTracks?: AudioTrack[];
 };
+
+export type AudioTrack = {
+  /** Absolute stream index in the file. */
+  index: number;
+  codec: string;
+  language?: string | null;
+  title?: string | null;
+  channels?: number | null;
+  default?: boolean;
+};
+
+export function audioTracks(m: MediaInfo | null | undefined): AudioTrack[] {
+  return m?.audioTracks ?? [];
+}
+
+const CHANNEL_NAMES: Record<number, string> = { 1: "mono", 2: "stereo", 6: "5.1", 8: "7.1" };
+
+/** "eng · English Dub · 5.1" style label for a track menu. */
+export function audioTrackLabel(t: AudioTrack, i: number): string {
+  const parts: string[] = [];
+  if (t.language && t.language !== "und") parts.push(t.language);
+  if (t.title && t.title.toLowerCase() !== (t.language ?? "").toLowerCase()) parts.push(t.title);
+  if (t.channels) parts.push(CHANNEL_NAMES[t.channels] ?? `${t.channels}ch`);
+  return parts.length ? `${i + 1}. ${parts.join(" · ")}` : `${i + 1}. ${t.codec || "Track"}`;
+}
 
 export function textSubtitleTracks(m: MediaInfo | null | undefined): SubtitleTrack[] {
   return (m?.subtitles ?? []).filter((s) => s.text);

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { AnimChannels, AnimKey, Clip, ClipEffect, ClipEffectKind, ClipKind, ClipboardChunk, ClipSpan, MediaInfo, SubCue, SubStyle, TimeRange, VideoProject } from "../core/types";
-import { DEFAULT_SUB_STYLE, textSubtitleTracks } from "../core/types";
+import { DEFAULT_SUB_STYLE, audioTrackLabel, audioTracks, textSubtitleTracks } from "../core/types";
 import { addGainRegion, clipBlur, clipDuration, clipEnd, formatTime, newId } from "../core/types";
 import {
   clipAt,
@@ -137,6 +137,42 @@ function fillKeyframes(get: () => EditorState, set: (s: Partial<EditorState>) =>
       keyBusy.delete(path);
       endJob(get, set, `kf:${path}`);
     });
+}
+
+/** Points the main source's preview sound and waveform at one audio stream. */
+function loadAudioTrack(
+  get: () => EditorState,
+  set: (s: Partial<EditorState>) => void,
+  path: string,
+  index: number,
+  announce: boolean,
+) {
+  const current = () => get().project?.sourcePath === path && get().audioTrackIndex === index;
+  const tracks = audioTracks(get().mediaByPath[path]);
+  const n = tracks.findIndex((t) => t.index === index);
+  const label = n >= 0 ? audioTrackLabel(tracks[n], n) : `stream ${index}`;
+  startJob(get, set, `atrack:${path}`, "audio track");
+  void invoke<string>("make_audio_proxy", { path, stream: index })
+    .then((file) => {
+      if (!current()) return;
+      set({
+        audioPreviewByPath: { ...get().audioPreviewByPath, [path]: convertFileSrc(file) },
+        ...(announce ? { status: `Audio track: ${label}` } : {}),
+      });
+    })
+    .catch((e) => {
+      if (current()) set({ status: `Audio track preview failed: ${String(e)}` });
+    })
+    .finally(() => endJob(get, set, `atrack:${path}`));
+  if (!announce) return;
+  startJob(get, set, `wave:${path}`, "waveform");
+  void invoke<number[]>("waveform", { path, stream: index })
+    .then((peaks) => {
+      if (!current()) return;
+      set({ peaks, peaksByPath: { ...get().peaksByPath, [path]: peaks } });
+    })
+    .catch(() => {})
+    .finally(() => endJob(get, set, `wave:${path}`));
 }
 
 function fileName(path: string) {
@@ -280,6 +316,9 @@ type EditorState = {
   setBurnSubs: (on: boolean) => void;
   setBurnSubIndex: (index: number) => void;
   setSubStyle: (patch: Partial<SubStyle>) => void;
+  /** Stream index of the main source's audio track used for preview and export (-1 = none). */
+  audioTrackIndex: number;
+  setAudioTrack: (index: number) => void;
   exportCodecs: { id: string; label: string }[];
   exportCodecsReady: boolean;
   primeExportCodecs: () => void;
@@ -507,20 +546,33 @@ export const useEditor = create<EditorState>((set, get) => ({
           burnSubs: false,
           burnSubIndex: textSubtitleTracks(media)[0]?.index ?? -1,
           subCues: [],
+          audioTrackIndex: audioTracks(media)[0]?.index ?? -1,
           status: (() => {
             const n = textSubtitleTracks(media).length;
+            const a = audioTracks(media).length;
             const name = path.split(/[/\\]/).pop();
             const t = formatTime(media.duration);
-            return n ? `${name} — ${t} · ${n} subtitle${n === 1 ? "" : "s"} (CC to burn on export)` : `${name} — ${t}`;
+            const extra = [
+              a > 1 ? `${a} audio tracks` : "",
+              n ? `${n} subtitle${n === 1 ? "" : "s"} (CC to burn on export)` : "",
+            ].filter(Boolean);
+            return extra.length ? `${name} — ${t} · ${extra.join(" · ")}` : `${name} — ${t}`;
           })(),
         }),
       );
       fillKeyframes(get, set, path);
+      // Native files play their sound straight from the source, where the
+      // webview may pick another track than export does: give the preview
+      // the exact first track instead.
+      const tracks = audioTracks(media);
+      if (tracks.length > 1 && PREVIEW_NATIVE.test(path)) loadAudioTrack(get, set, path, tracks[0].index, false);
       if (media.hasAudio) {
         startJob(get, set, `wave:${path}`, "waveform");
         void invoke<number[]>("waveform", { path })
           .then((peaks) => {
             if (get().project?.sourcePath !== path) return;
+            // A track picked meanwhile loads its own waveform.
+            if (get().audioTrackIndex !== (tracks[0]?.index ?? -1)) return;
             set({ peaks, peaksByPath: { ...get().peaksByPath, [path]: peaks } });
           })
           .catch(() => {})
@@ -799,6 +851,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         burnSubIndex: -1,
         subCues: [],
         subStyle: { ...DEFAULT_SUB_STYLE },
+        audioTrackIndex: -1,
       }),
     );
   },
@@ -1422,6 +1475,15 @@ export const useEditor = create<EditorState>((set, get) => ({
       .catch(() => set({ exportCodecs: [{ id: "h264", label: "H.264" }], exportCodecsReady: true }));
   },
   setSubStyle: (patch) => set({ subStyle: { ...get().subStyle, ...patch } }),
+  audioTrackIndex: -1,
+  setAudioTrack: (index) => {
+    const p = get().project;
+    const media = get().media;
+    if (!p || !media || index === get().audioTrackIndex) return;
+    if (!audioTracks(media).some((t) => t.index === index)) return;
+    set({ audioTrackIndex: index });
+    loadAudioTrack(get, set, p.sourcePath, index, true);
+  },
   setBurnSubs: (on) => set({ burnSubs: on, subCues: on ? get().subCues : [] }),
   setBurnSubIndex: (index) => {
     set({ burnSubIndex: index, burnSubs: true });
@@ -1460,7 +1522,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   exportVideo: async (opts) => {
-    const { project, media, busy, burnSubs, burnSubIndex, subStyle } = get();
+    const { project, media, busy, burnSubs, burnSubIndex, subStyle, audioTrackIndex } = get();
     if (!project || !media || busy) return;
     const profile = opts?.profile ?? "quick";
     const suggested = await invoke<string>("suggest_save", { path: project.sourcePath });
@@ -1576,6 +1638,7 @@ export const useEditor = create<EditorState>((set, get) => ({
           audioClips,
           audioOverlay: hasOverAudio ? audioOverlay : [],
           hasAudio: hasAudioClips,
+          audioStream: audioTracks(media).length > 1 && audioTrackIndex >= 0 ? audioTrackIndex : null,
           videoCodec: media.videoCodec,
           useStreamCopy,
           width: outW,

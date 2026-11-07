@@ -23,6 +23,20 @@ pub struct MediaInfoDto {
     pub keyframe_times: Vec<f64>,
     #[serde(default)]
     pub subtitles: Vec<SubtitleTrackDto>,
+    #[serde(default)]
+    pub audio_tracks: Vec<AudioTrackDto>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTrackDto {
+    /// Absolute stream index in the file (what `-map 0:N` takes).
+    pub index: i32,
+    pub codec: String,
+    pub language: Option<String>,
+    pub title: Option<String>,
+    pub channels: Option<i32>,
+    pub default: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -131,6 +145,10 @@ pub struct ExportPlan {
     #[serde(default)]
     pub audio_overlay: Option<Vec<ClipDto>>,
     pub has_audio: bool,
+    /// Absolute stream index of the audio track to use from `source_path`
+    /// (None = the file's first audio stream). Other files keep their first.
+    #[serde(default)]
+    pub audio_stream: Option<i32>,
     pub video_codec: Option<String>,
     pub use_stream_copy: bool,
     #[serde(default)]
@@ -593,6 +611,7 @@ fn probe_sync(app: AppHandle, path: String) -> Result<MediaInfoDto, String> {
     let mut audio_codec = None;
     let mut has_audio = false;
     let mut subtitles: Vec<SubtitleTrackDto> = Vec::new();
+    let mut audio_tracks: Vec<AudioTrackDto> = Vec::new();
 
     if let Some(streams) = v["streams"].as_array() {
         for s in streams {
@@ -635,6 +654,14 @@ fn probe_sync(app: AppHandle, path: String) -> Result<MediaInfoDto, String> {
                     if audio_codec.is_none() {
                         audio_codec = s["codec_name"].as_str().map(|x| x.to_string());
                     }
+                    audio_tracks.push(AudioTrackDto {
+                        index: s["index"].as_i64().unwrap_or(0) as i32,
+                        codec: s["codec_name"].as_str().unwrap_or("unknown").to_string(),
+                        language: s["tags"]["language"].as_str().map(|x| x.to_string()),
+                        title: s["tags"]["title"].as_str().map(|x| x.to_string()),
+                        channels: s["channels"].as_i64().map(|x| x as i32),
+                        default: s["disposition"]["default"].as_i64() == Some(1),
+                    });
                 }
                 _ => {}
             }
@@ -655,6 +682,7 @@ fn probe_sync(app: AppHandle, path: String) -> Result<MediaInfoDto, String> {
         has_audio,
         keyframe_times: vec![],
         subtitles,
+        audio_tracks,
     })
 }
 
@@ -1453,18 +1481,24 @@ fn working_encoders(ffmpeg: &Path) -> Vec<EncoderOpt> {
 }
 
 #[tauri::command]
-async fn waveform(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
-    off_thread(move || waveform_sync(app, path)).await
+async fn waveform(app: AppHandle, path: String, stream: Option<i32>) -> Result<Vec<f32>, String> {
+    off_thread(move || waveform_sync(app, path, stream)).await
 }
 
-fn waveform_sync(app: AppHandle, path: String) -> Result<Vec<f32>, String> {
+fn waveform_sync(app: AppHandle, path: String, stream: Option<i32>) -> Result<Vec<f32>, String> {
     let ffmpeg = ffmpeg_bin(&app, "ffmpeg");
+    let map = match stream {
+        Some(i) if i >= 0 => format!("0:{i}"),
+        _ => "0:a:0?".into(),
+    };
     let out = hidden_command(&ffmpeg)
         .args([
             "-hide_banner",
             "-nostdin",
             "-i",
             &path,
+            "-map",
+            &map,
             "-vn",
             "-ac",
             "1",
@@ -1857,6 +1891,56 @@ fn make_proxy_sync(app: AppHandle, path: String, video_codec: Option<String>) ->
     Ok(PreviewProxyDto { video: video_s, audio: audio_out })
 }
 
+/// Preview sound for one chosen audio stream (e.g. a dub that is not the
+/// file's first track): decoded to a cached stereo m4a the preview plays.
+#[tauri::command]
+async fn make_audio_proxy(app: AppHandle, path: String, stream: i32) -> Result<String, String> {
+    off_thread(move || make_audio_proxy_sync(app, path, stream)).await
+}
+
+fn make_audio_proxy_sync(app: AppHandle, path: String, stream: i32) -> Result<String, String> {
+    let ffmpeg = ffmpeg_bin(&app, "ffmpeg");
+    let stem = Path::new(&path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("v")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(48)
+        .collect::<String>();
+    // Hash the full path too so two same-named files in different folders
+    // don't share a cached track.
+    let mut h: u64 = 1469598103934665603;
+    for b in path.to_ascii_lowercase().bytes() {
+        h = (h ^ b as u64).wrapping_mul(1099511628211);
+    }
+    let out = std::env::temp_dir().join(format!("grimcut-px-a{stream}-{stem}-{:08x}.m4a", h as u32));
+    let fresh = || match (fs::metadata(&path), fs::metadata(&out)) {
+        (Ok(src), Ok(dst)) => dst.len() > 400 && dst.modified().ok() >= src.modified().ok(),
+        _ => false,
+    };
+    if fresh() {
+        return Ok(out.to_string_lossy().into_owned());
+    }
+    let _ = app.emit("export-progress", "Preparing audio track…");
+    let out_s = out.to_string_lossy().into_owned();
+    let map = format!("0:{stream}");
+    let args = [
+        "-hide_banner", "-y", "-i", &path, "-map", &map, "-vn", "-sn", "-dn", "-c:a", "aac", "-b:a",
+        "160k", "-ac", "2", &out_s,
+    ];
+    let (_, err, code) = run_cmd(&ffmpeg, &args)?;
+    if code != 0 || !fresh() {
+        let _ = fs::remove_file(&out);
+        return Err(if err.trim().is_empty() {
+            "Could not prepare that audio track.".into()
+        } else {
+            trim_ffmpeg_err(&err)
+        });
+    }
+    Ok(out_s)
+}
+
 #[tauri::command]
 async fn export_video(app: AppHandle, plan: ExportPlan) -> Result<ExportResultDto, String> {
     off_thread(move || export_video_sync(app, plan)).await
@@ -2029,7 +2113,7 @@ fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
             src,
             &plan.clips[0],
             &plan.output_path,
-            plan.has_audio,
+            plan.has_audio.then(|| audio_spec(plan, src)),
             plan.video_codec.as_deref(),
         );
     }
@@ -2047,7 +2131,7 @@ fn export_copy(ffmpeg: &Path, plan: &ExportPlan) -> Result<(), String> {
             src,
             clip,
             part.to_str().unwrap(),
-            plan.has_audio,
+            plan.has_audio.then(|| audio_spec(plan, src)),
             plan.video_codec.as_deref(),
         )?;
         let escaped = part.to_string_lossy().replace('\'', r"'\''");
@@ -2107,7 +2191,7 @@ fn extract_copy(
     src: &str,
     clip: &ClipDto,
     dest: &str,
-    has_audio: bool,
+    audio: Option<String>,
     video_codec: Option<&str>,
 ) -> Result<(), String> {
     if clip.gap {
@@ -2140,8 +2224,8 @@ fn extract_copy(
         "-avoid_negative_ts".into(),
         "make_zero".into(),
     ];
-    if has_audio {
-        args.extend(["-map".into(), "0:a:0".into()]);
+    if let Some(spec) = audio {
+        args.extend(["-map".into(), format!("0:{spec}")]);
     }
     hevc_tag(video_codec, dest, &mut args);
     for f in mp4_copy_flags(dest) {
@@ -2241,13 +2325,23 @@ fn append_audio_concat(
             } else {
                 String::new()
             };
+            let pick = audio_spec(plan, src);
             fc.push_str(&format!(
-                "[{idx}:a]{shift}atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{gain}[{lab}];"
+                "[{idx}:{pick}]{shift}atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{gain}[{lab}];"
             ));
         }
         pads.push_str(&format!("[{lab}]"));
     }
     fc.push_str(&format!("{}concat=n={}:v=0:a=1[{out}];", pads, clips.len()));
+}
+
+/// Stream specifier for a source's audio: the chosen track for the main
+/// source, otherwise the first audio stream.
+fn audio_spec(plan: &ExportPlan, src: &str) -> String {
+    match plan.audio_stream {
+        Some(i) if i >= 0 && path_same(src, &plan.source_path) => i.to_string(),
+        _ => "a:0".into(),
+    }
 }
 
 fn append_audio_mix(
@@ -2780,6 +2874,7 @@ pub fn run() {
             make_proxy,
             drop_preview_cache,
             extract_subtitles,
+            make_audio_proxy,
             list_export_codecs,
             export_video,
             cancel_export,

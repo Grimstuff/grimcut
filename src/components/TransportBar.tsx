@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FONT_SIZE_STEPS, RES_BY_AR, arOf, motionTarget, stepFontSize, visualFontSize } from "../core/canvas";
 import type { AnimChannels, AnimKey, Clip, TextAlign } from "../core/types";
-import { SUB_PICK_ID, SUBTITLE_FONTS, SUBTITLE_SWATCHES, formatTime, textSubtitleTracks } from "../core/types";
+import { SUB_PICK_ID, SUBTITLE_FONTS, SUBTITLE_SWATCHES, audioTrackLabel, audioTracks, formatTime, textSubtitleTracks } from "../core/types";
 import { useEditor } from "../store/editorStore";
 import { ColorPop, TextColorPop } from "./TextColorPop";
 import { COMMON_FONTS, listSystemFonts } from "../lib/systemFonts";
@@ -849,6 +849,11 @@ export function TransportBar() {
   const burnSubIndex = useEditor((s) => s.burnSubIndex);
   const subStyle = useEditor((s) => s.subStyle);
   const subTracks = textSubtitleTracks(media);
+  const aTracks = audioTracks(media);
+  const audioTrackIndex = useEditor((s) => s.audioTrackIndex);
+  const aTrackNo = Math.max(0, aTracks.findIndex((t) => t.index === audioTrackIndex));
+  const [audOpen, setAudOpen] = useState(false);
+  const audPop = useRef<HTMLDivElement>(null);
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [resOpen, setResOpen] = useState(false);
   const [resText, setResText] = useState("");
@@ -888,6 +893,7 @@ export function TransportBar() {
       }
       if (!fxPop.current?.contains(t)) setFxOpen(false);
       if (!subPop.current?.contains(t)) setSubOpen(false);
+      if (!audPop.current?.contains(t)) setAudOpen(false);
       if (!exportPop.current?.contains(t)) {
         setExportOpen(false);
         setManualOpen(false);
@@ -1111,6 +1117,44 @@ export function TransportBar() {
             </div>
           ) : null}
         </div>
+        {aTracks.length > 1 ? (
+          <div className="tb-subs" ref={audPop}>
+            <button
+              type="button"
+              className={`icon-btn tb-cc${audOpen || aTrackNo > 0 ? " is-on" : ""}`}
+              title={`Audio track: ${audioTrackLabel(aTracks[aTrackNo], aTrackNo)} (used for preview and export)`}
+              disabled={busy}
+              onClick={() => {
+                setAudOpen((v) => !v);
+                setSubOpen(false);
+                setCanvasOpen(false);
+                setResOpen(false);
+                setFxOpen(false);
+              }}
+            >
+              A{aTrackNo + 1}
+            </button>
+            {audOpen ? (
+              <div className="tb-float tb-sub-menu">
+                <div className="tb-sub-tracks tb-aud-tracks">
+                  {aTracks.map((t, i) => (
+                    <button
+                      key={t.index}
+                      type="button"
+                      className={i === aTrackNo ? "is-on" : ""}
+                      onClick={() => {
+                        useEditor.getState().setAudioTrack(t.index);
+                        setAudOpen(false);
+                      }}
+                    >
+                      {audioTrackLabel(t, i)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {subTracks.length > 0 ? (
         <div className="tb-subs" ref={subPop}>
           <button
