@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.13
 
 - Fixed: dragging the playhead over a video that appears more than once on the timeline (a reused or moved piece) made the playhead jump to the other copy and the preview flicker to black. The playhead now stays where you drag or click it, and playback follows the piece you are actually on.
 
