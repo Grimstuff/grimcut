@@ -37,25 +37,45 @@ function keepEl(prev: HTMLVideoElement | null, next: HTMLVideoElement | null) {
   return null;
 }
 
-function timelineFromVideoTime(p: VideoProject, srcT: number) {
+/**
+ * Timeline time the main <video> is showing. Several base clips can cover the same
+ * source second (a reused or reordered piece, or another file at the same time), so
+ * only clips of the file the element has loaded count, and the one nearest the
+ * current playhead wins. Taking the first match made the playhead jump to another clip.
+ */
+export function timelineFromVideoTime(p: VideoProject, srcT: number, near: number, path?: string) {
+  let best: number | null = null;
+  let bestD = Infinity;
   for (const c of p.clips) {
     if (c.kind !== "video" || c.layer === "over") continue;
-    if (srcT >= c.sourceStart - 0.05 && srcT <= c.sourceEnd + 0.05) {
-      return c.timelineStart + (srcT - c.sourceStart);
+    if (path && clipSourcePath(p, c) !== path) continue;
+    if (srcT < c.sourceStart - 0.05 || srcT > c.sourceEnd + 0.05) continue;
+    const tl = c.timelineStart + (srcT - c.sourceStart);
+    const d = Math.abs(tl - near);
+    if (d < bestD) {
+      bestD = d;
+      best = tl;
     }
   }
-  return null;
+  return best;
+}
+
+function videoTimeline(p: VideoProject, v: HTMLVideoElement, srcT: number) {
+  return timelineFromVideoTime(p, srcT, useEditor.getState().playhead, v.dataset.mediaPath || undefined);
 }
 
 function pullPlayheadFromVideo() {
   const st = useEditor.getState();
   const p = st.project;
   const v = videoEl;
+  // Only playback moves the playhead from the picture. A paused seek (scrub, click,
+  // frame step) fires timeupdate too, and must not overwrite where the user put it.
+  if (!st.playing || st.scrubPreview != null) return;
   if (!p || !v || !Number.isFinite(v.currentTime) || v.dataset.recovering === "1") return;
-  const ph = timelineFromVideoTime(p, v.currentTime);
+  const ph = videoTimeline(p, v, v.currentTime);
   if (ph == null) return;
   useEditor.setState({ playhead: ph, exactPlayhead: false, showBlack: false, previewOver: !!clipAt(p, ph, "video", "over") });
-  if (st.playing) driveSound(p, ph, !v.paused && !v.error, st.previewVolume);
+  driveSound(p, ph, !v.paused && !v.error, st.previewVolume);
 }
 
 function nextKeyframeAfter(t: number) {
@@ -86,7 +106,7 @@ function skipBrokenFrame(el: HTMLVideoElement): boolean {
   el.dataset.recovering = "1";
   const p = useEditor.getState().project;
   if (p) {
-    const ph = timelineFromVideoTime(p, to);
+    const ph = videoTimeline(p, el, to);
     if (ph != null) useEditor.setState({ playhead: ph, exactPlayhead: false, status: `Skipped bad frame @ ${from.toFixed(1)}s` });
   }
   el.pause();
@@ -376,7 +396,7 @@ function tick(now: number) {
     return;
   }
 
-  const fromVid = videoEl && Number.isFinite(videoEl.currentTime) ? timelineFromVideoTime(p, videoEl.currentTime) : null;
+  const fromVid = videoEl && Number.isFinite(videoEl.currentTime) ? videoTimeline(p, videoEl, videoEl.currentTime) : null;
   if (fromVid != null) {
     ph = fromVid;
     if (videoEl!.paused && !videoEl!.seeking) playMedia(videoEl!, false);
