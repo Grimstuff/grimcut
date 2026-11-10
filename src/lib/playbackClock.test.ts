@@ -11,12 +11,14 @@ import { tryAddOverlayFromMedia } from "../core/edits";
 import { fromMedia } from "../core/project";
 import type { MediaInfo } from "../core/types";
 import { useEditor } from "../store/editorStore";
-import { setOverlayVideo, syncPreviewToPlayhead } from "./playbackClock";
+import { setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead, timelineFromVideoTime } from "./playbackClock";
 
 /** Just enough of a <video> for the preview clock. Reloading drops the frame back to 0 like a real element. */
 function fakeVideo() {
   let src: string | null = null;
+  const listeners: Record<string, (() => void)[]> = {};
   return {
+    listeners,
     dataset: {} as Record<string, string>,
     muted: false,
     volume: 1,
@@ -27,7 +29,12 @@ function fakeVideo() {
     currentTime: 0,
     isConnected: true,
     pause() {},
-    addEventListener() {},
+    addEventListener(name: string, fn: () => void) {
+      (listeners[name] ??= []).push(fn);
+    },
+    fire(name: string) {
+      for (const fn of listeners[name] ?? []) fn();
+    },
     getAttribute: (n: string) => (n === "src" ? src : null),
     removeAttribute(n: string) {
       if (n === "src") src = null;
@@ -72,5 +79,36 @@ describe("overlay preview picture", () => {
     syncPreviewToPlayhead();
     expect(el.getAttribute("src")).toBe("asset://slime");
     expect(el.currentTime).toBeCloseTo(1);
+  });
+});
+
+describe("playhead from the preview picture", () => {
+  // The same source second sits on the timeline twice: 0-10 at 0, and 0-10 again at 20.
+  const twice = () => {
+    const p = fromMedia(base);
+    const a = p.clips[0];
+    return { ...p, clips: [a, { ...a, id: "again", timelineStart: 20 }] };
+  };
+
+  it("picks the copy nearest the playhead, not the first one", () => {
+    const p = twice();
+    expect(timelineFromVideoTime(p, 4, 23)).toBeCloseTo(24);
+    expect(timelineFromVideoTime(p, 4, 3)).toBeCloseTo(4);
+  });
+
+  it("ignores clips of another file", () => {
+    const p = twice();
+    p.clips[1] = { ...p.clips[1], sourcePath: "C:/other.mp4" };
+    expect(timelineFromVideoTime(p, 4, 23, base.path)).toBeCloseTo(4);
+    expect(timelineFromVideoTime(p, 4, 3, "C:/other.mp4")).toBeCloseTo(24);
+  });
+
+  it("leaves the playhead alone when a paused seek reports its time", () => {
+    useEditor.setState({ project: twice(), playhead: 24, playing: false, scrubPreview: null, previewUrl: "asset://base", previewByPath: { [base.path]: "asset://base" } });
+    const el = fakeVideo();
+    setPreviewVideo(el as unknown as HTMLVideoElement);
+    el.currentTime = 4;
+    el.fire("timeupdate");
+    expect(useEditor.getState().playhead).toBeCloseTo(24);
   });
 });
