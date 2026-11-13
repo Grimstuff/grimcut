@@ -4,13 +4,40 @@ export type { ClipTransform };
 
 export type ClipKind = "video" | "audio" | "text";
 export type TextAlign = "left" | "center" | "right";
-export type ClipEffectKind = "blur";
+export type ClipEffectKind = "blur" | "key";
+
+/** Chroma key settings. Same math in the preview shader and the FFmpeg export. */
+export type KeyParams = {
+  /** Screen color, #rrggbb. */
+  color: string;
+  /** How far from the key color (in chroma) still counts as screen, 0..0.5. */
+  similarity: number;
+  /** Soft ramp beyond `similarity`, 0..0.5. 0 = hard edge. */
+  blend: number;
+  /** Shrink the matte edge by this many source pixels (0..8). */
+  choke: number;
+  /** Feather (blur) the matte edge, in source pixels (0..8). */
+  feather: number;
+  /** Remove screen color bleeding onto the subject, 0..1. */
+  spill: number;
+};
+
+export const DEFAULT_KEY: KeyParams = {
+  color: "#00b140",
+  similarity: 0.12,
+  blend: 0.08,
+  choke: 0,
+  feather: 0,
+  spill: 0.8,
+};
 
 export type ClipEffect = {
   id: string;
   kind: ClipEffectKind;
-  /** Blur radius in px (preview CSS / ffmpeg sigma). */
+  /** Blur radius in px (preview CSS / ffmpeg sigma). Unused by "key". */
   amount: number;
+  /** Chroma key settings (kind "key"). */
+  key?: KeyParams;
 };
 
 /** What a motion key owns. Omitted or true = on. */
@@ -252,7 +279,7 @@ export function cloneClip(s: Clip): Clip {
   return {
     ...s,
     transform: s.transform ? { ...s.transform } : undefined,
-    effects: s.effects?.map((e) => ({ ...e })),
+    effects: s.effects?.map((e) => ({ ...e, key: e.key ? { ...e.key } : undefined })),
     gainSpans: s.gainSpans?.map((g) => ({ ...g })),
     anim: s.anim?.map((k) => ({ ...k })),
   };
@@ -260,6 +287,13 @@ export function cloneClip(s: Clip): Clip {
 
 export function clipEffects(c: Clip): ClipEffect[] {
   return c.effects ?? [];
+}
+
+/** The clip's chroma key, or null. Only one key per clip applies. */
+export function clipKey(c: Clip): KeyParams | null {
+  if (c.kind !== "video") return null;
+  const fx = clipEffects(c).find((e) => e.kind === "key");
+  return fx ? { ...DEFAULT_KEY, ...fx.key } : null;
 }
 
 export function clipBlur(c: Clip): number {

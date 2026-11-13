@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type PointerEvent as RE } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as RE, type RefObject } from "react";
 import { clipAt, clipSourcePath, mapTimelineToSource } from "../core/project";
-import { clipBlur, clipEnd, cueAt, type Clip } from "../core/types";
+import { clipBlur, clipEnd, clipKey, cueAt, type Clip, type KeyParams } from "../core/types";
+import { averageHex } from "../core/chromakey";
+import { KeyRenderer } from "../lib/keyGl";
 import {
   bakeTextScale,
   canvasMagnetPoints,
@@ -289,6 +291,20 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
   };
 
   const onPointerDown = (e: RE) => {
+    if (colorPickId?.startsWith(KEY_PICK)) {
+      e.preventDefault();
+      e.stopPropagation();
+      const fxId = colorPickId.slice(KEY_PICK.length);
+      const pt = toCanvas(e.clientX, e.clientY);
+      const owner = [overClip, baseClip].find((c) => c?.effects?.some((x) => x.id === fxId)) ?? null;
+      const el = owner === overClip ? overRef.current : videoRef.current;
+      const hex = owner ? sampleClip(pt.x, pt.y, cw, ch, el, owner) : null;
+      const st = useEditor.getState();
+      if (hex) st.setKeyParams(fxId, { color: hex }, st.snapshot());
+      else useEditor.setState({ status: "Click the screen color inside the keyed clip" });
+      st.setColorPick(null);
+      return;
+    }
     if (colorPickId) {
       e.preventDefault();
       e.stopPropagation();
@@ -610,6 +626,18 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
     };
   };
 
+  /** The clip's key, unless the user is picking its key color (then show the raw frame). */
+  const keyOf = (clip: Clip | null): KeyParams | null => {
+    if (!clip) return null;
+    const k = clipKey(clip);
+    if (!k) return null;
+    const fx = clip.effects?.find((x) => x.kind === "key");
+    if (fx && colorPickId === KEY_PICK + fx.id) return null;
+    return k;
+  };
+  const hideIfKeyed = <T extends object>(clip: Clip | null, style: T): T =>
+    keyOf(clip) ? { ...style, opacity: 0 } : style;
+
   const bbox = selectedLive ? rectOf(selectedLive, cw, ch, useEditor.getState().playhead) : null;
 
   return (
@@ -631,28 +659,32 @@ function PreviewCanvas({ previewUrl }: { previewUrl: string }) {
                 setPreviewVideo(el);
               }}
               className="layer-vid is-base"
+              crossOrigin="anonymous"
               src={previewUrl}
               tabIndex={-1}
               playsInline
               muted
               preload="auto"
               disablePictureInPicture
-              style={placeVideo(baseClip)}
+              style={hideIfKeyed(baseClip, placeVideo(baseClip))}
             />
+            {keyOf(baseClip) ? <KeyLayer video={videoRef} params={keyOf(baseClip)!} style={placeVideo(baseClip)} /> : null}
             <video
               ref={(el) => {
                 overRef.current = el;
                 setOverlayVideo(el);
               }}
               className="layer-vid is-over"
+              crossOrigin="anonymous"
               src={overClip ? urlOf(overClip) ?? overlayUrl ?? undefined : overlayUrl ?? undefined}
               tabIndex={-1}
               playsInline
               muted
               preload="auto"
               disablePictureInPicture
-              style={placeVideo(overClip)}
+              style={hideIfKeyed(overClip, placeVideo(overClip))}
             />
+            {keyOf(overClip) ? <KeyLayer video={overRef} params={keyOf(overClip)!} style={placeVideo(overClip)} /> : null}
             {(() => {
               if (!burnSubs || !subCues.length || !project) return null;
               const t = playing ? playhead : (scrubPreview ?? playhead);
@@ -873,4 +905,97 @@ function urlOf(clip: Clip) {
   if (!p) return null;
   const path = clipSourcePath(p, clip);
   return st.previewByPath[path] ?? (path === p.sourcePath ? st.previewUrl : st.overlayUrl);
+}
+
+export const KEY_PICK = "key:";
+
+/** Live chroma-keyed copy of a video layer, drawn with WebGL over the (hidden) video. */
+function KeyLayer({
+  video,
+  params,
+  style,
+}: {
+  video: RefObject<HTMLVideoElement | null>;
+  params: KeyParams;
+  style: CSSProperties;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const live = useRef(params);
+  live.current = params;
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    let r: KeyRenderer;
+    try {
+      r = new KeyRenderer(canvas);
+    } catch {
+      setFailed(true);
+      return;
+    }
+    let raf = 0;
+    let lastT = -1;
+    let lastP = "";
+    let lastEl: HTMLVideoElement | null = null;
+    let dirty = true;
+    const mark = () => {
+      dirty = true;
+    };
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const el = video.current;
+      if (!el) return;
+      if (el !== lastEl) {
+        lastEl?.removeEventListener("seeked", mark);
+        lastEl?.removeEventListener("loadeddata", mark);
+        el.addEventListener("seeked", mark);
+        el.addEventListener("loadeddata", mark);
+        lastEl = el;
+        dirty = true;
+      }
+      const p = JSON.stringify(live.current);
+      if (!dirty && el.paused && el.currentTime === lastT && p === lastP) return;
+      if (r.render(el, live.current)) {
+        dirty = false;
+        lastT = el.currentTime;
+        lastP = p;
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      lastEl?.removeEventListener("seeked", mark);
+      lastEl?.removeEventListener("loadeddata", mark);
+      r.dispose();
+    };
+  }, [video]);
+
+  if (failed) return null;
+  return <canvas ref={ref} className="layer-vid layer-key" style={{ ...style, pointerEvents: "none" }} />;
+}
+
+/** Average 5×5 source pixels of one clip's frame under a canvas point. */
+function sampleClip(x: number, y: number, cw: number, ch: number, el: HTMLVideoElement | null, clip: Clip): string | null {
+  if (!el || el.readyState < 2 || !el.videoWidth) return null;
+  const r = rectOf(clip, cw, ch, useEditor.getState().playhead);
+  const a = (-r.rotation * Math.PI) / 180;
+  const dx = x - r.cx;
+  const dy = y - r.cy;
+  const lx = dx * Math.cos(a) - dy * Math.sin(a) + r.w / 2;
+  const ly = dx * Math.sin(a) + dy * Math.cos(a) + r.h / 2;
+  if (lx < 0 || ly < 0 || lx > r.w || ly > r.h) return null;
+  const sx = Math.floor((lx / r.w) * el.videoWidth);
+  const sy = Math.floor((ly / r.h) * el.videoHeight);
+  const c = document.createElement("canvas");
+  c.width = 5;
+  c.height = 5;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  try {
+    ctx.drawImage(el, Math.max(0, sx - 2), Math.max(0, sy - 2), 5, 5, 0, 0, 5, 5);
+    return averageHex(ctx.getImageData(0, 0, 5, 5).data);
+  } catch {
+    return null;
+  }
 }

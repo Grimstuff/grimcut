@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { AnimChannels, AnimKey, Clip, ClipEffect, ClipEffectKind, ClipKind, ClipboardChunk, ClipSpan, MediaInfo, SubCue, SubStyle, TimeRange, VideoProject } from "../core/types";
+import type { AnimChannels, AnimKey, Clip, ClipEffect, ClipEffectKind, KeyParams, ClipKind, ClipboardChunk, ClipSpan, MediaInfo, SubCue, SubStyle, TimeRange, VideoProject } from "../core/types";
 import { DEFAULT_SUB_STYLE, audioTrackLabel, audioTracks, textSubtitleTracks } from "../core/types";
-import { addGainRegion, clipBlur, clipDuration, clipEnd, formatTime, newId } from "../core/types";
+import { addGainRegion, clipBlur, clipDuration, clipEnd, clipKey, DEFAULT_KEY, formatTime, newId } from "../core/types";
 import {
   clipAt,
   flattenCanvas,
@@ -312,6 +312,10 @@ type EditorState = {
   selectEffect: (clipId: string, effectId: string) => void;
   addEffect: (kind: ClipEffectKind) => void;
   setEffectAmount: (effectId: string, amount: number) => void;
+  /** Live-edit a chroma key; pass `before` (a snapshot) to also record one undo step. */
+  setKeyParams: (effectId: string, patch: Partial<KeyParams>, before?: Clip[] | null) => void;
+  /** Replace a clip's source with a pre-keyed file (Advanced key result). */
+  applyKeyedSource: (clipId: string, path: string) => Promise<void>;
   saveProject: () => void;
   exportVideo: (opts?: ExportOpts) => Promise<void>;
   burnSubs: boolean;
@@ -1001,20 +1005,76 @@ export const useEditor = create<EditorState>((set, get) => ({
       set({ status: "Select a video or text clip to add an effect" });
       return;
     }
+    if (kind === "key" && clip.kind !== "video") {
+      set({ status: "Chroma key works on video clips" });
+      return;
+    }
+    const label = kind === "key" ? "Chroma key" : "Gaussian blur";
     const existing = clip.effects?.find((e) => e.kind === kind);
     if (existing) {
       set({
         selectedId: clip.id,
         selectedEffectId: existing.id,
         editingTextId: null,
-        status: "Blur selected",
+        status: `${label} selected`,
       });
       return;
     }
-    const fx: ClipEffect = { id: newId(), kind, amount: 8 };
+    const fx: ClipEffect =
+      kind === "key" ? { id: newId(), kind, amount: 0, key: { ...DEFAULT_KEY } } : { id: newId(), kind, amount: 8 };
     const clips = p.clips.map((c) => (c.id === clip!.id ? { ...c, effects: [...(c.effects ?? []), fx] } : c));
-    applyClips(get, set, clips, "Gaussian blur");
+    applyClips(get, set, clips, label);
     set({ selectedId: clip.id, selectedEffectId: fx.id, editingTextId: null });
+  },
+
+  setKeyParams: (effectId, patch, before) => {
+    const p = get().project;
+    if (!p) return;
+    const clips = p.clips.map((c) =>
+      c.effects?.some((e) => e.id === effectId)
+        ? {
+            ...c,
+            effects: c.effects.map((e) =>
+              e.id === effectId ? { ...e, key: { ...DEFAULT_KEY, ...e.key, ...patch } } : e,
+            ),
+          }
+        : c,
+    );
+    if (before) {
+      set({ project: { ...p, clips } });
+      get().commit(before, "Chroma key");
+    } else set({ project: { ...p, clips } });
+  },
+
+  applyKeyedSource: async (clipId, path) => {
+    const p = get().project;
+    const clip = p?.clips.find((c) => c.id === clipId);
+    if (!p || !clip) return;
+    let media = get().mediaByPath[path];
+    if (!media) media = await invoke<MediaInfo>("probe", { path });
+    const url = convertFileSrc(path);
+    const cur = get().project!;
+    const clips = cur.clips.map((c) => {
+      if (c.id !== clipId) return c;
+      const len = c.sourceEnd - c.sourceStart;
+      return {
+        ...c,
+        sourcePath: path,
+        sourceStart: 0,
+        sourceEnd: Math.min(len, media!.duration || len),
+        // The alpha is baked into the new file.
+        effects: (c.effects ?? []).filter((e) => e.kind !== "key"),
+      };
+    });
+    set({
+      mediaByPath: { ...get().mediaByPath, [path]: media },
+      previewByPath: { ...get().previewByPath, [path]: url },
+      overlayUrl: clip.layer === "over" ? url : get().overlayUrl,
+      overlayMedia: clip.layer === "over" ? media : get().overlayMedia,
+      selectedEffectId: null,
+    });
+    applyClips(get, set, clips, "Advanced key");
+    set({ status: `Advanced key applied: ${fileName(path)}` });
   },
 
   setEffectAmount: (effectId, amount) => {
@@ -1568,6 +1628,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         const xf = c.transform;
         return (
           clipBlur(c) > 0.05 ||
+          !!clipKey(c) ||
           (xf &&
             (xf.x !== 0 ||
               xf.y !== 0 ||

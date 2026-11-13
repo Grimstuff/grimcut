@@ -1,12 +1,14 @@
 import { evenPx, poseAt, xfScaleX, xfScaleY, type ClipTransform } from "./canvas";
 import {
   type Clip,
+  type KeyParams,
   type ClipKind,
   type ClipLayer,
   type MediaInfo,
   type PlaybackFollow,
   type VideoProject,
   clipBlur,
+  clipKey,
   clipDuration,
   clipGainAtSource,
   clipEnd,
@@ -275,6 +277,8 @@ export type CompLayer = {
   srcWidth: number;
   srcHeight: number;
   blur: number;
+  /** Chroma key, or null. */
+  key: KeyParams | null;
 };
 
 export type CompText = {
@@ -363,6 +367,7 @@ export function flattenCanvas(
           srcWidth: size.w,
           srcHeight: size.h,
           blur: clipBlur(c),
+          key: clipKey(c),
         });
       }
       const tx = clipAt(p, mid, "text", layer);
