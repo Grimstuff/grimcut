@@ -1426,18 +1426,13 @@ fn gif_exact_fps(want: f64) -> f64 {
 }
 
 /// The filter chain that turns the timeline's `[vout]` into GIF-sized frames.
-/// When the GIF rate divides the timeline rate evenly (60 -> 20, 50 -> 25)
-/// every Nth frame is taken as is; otherwise frames are blended at their real
-/// positions (`framerate`) so motion stays even instead of skipping a frame
-/// every so often.
-fn gif_frames_chain(gif_fps: f64, src_fps: f64, width: i32) -> String {
-    let ratio = src_fps / gif_fps;
-    let resample = if (ratio - ratio.round()).abs() < 0.02 {
-        format!("fps={gif_fps:.4}")
-    } else {
-        format!("framerate=fps={gif_fps:.4}")
-    };
-    format!("[vout]{resample},scale={width}:-1:flags=lanczos")
+/// `framerate` places each GIF frame at its real time and blends the two
+/// nearest timeline frames, so motion stays even when the rates don't divide
+/// (60 -> 25). `fps` (nearest frame) was not safe even for whole ratios: the
+/// canvas composite can land its 60 fps frames half a frame off the source,
+/// and fps=30 then hit the repeated half of doubled frames every third frame.
+fn gif_frames_chain(gif_fps: f64, width: i32) -> String {
+    format!("[vout]framerate=fps={gif_fps:.4},scale={width}:-1:flags=lanczos")
 }
 
 /// Two-pass GIF: pass 1 builds one 256-colour palette from the whole
@@ -1474,7 +1469,7 @@ fn gif_passes(
     let dur = plan_secs(plan).max(0.05);
     let (gif_fps, width) = gif_dims(plan, canvas_w, fps);
     let base = fc.trim_end_matches(';');
-    let frames = gif_frames_chain(gif_fps, fps, width);
+    let frames = gif_frames_chain(gif_fps, width);
     let mut input_args: Vec<String> = Vec::new();
     for (inp, ss) in inputs
         .iter()
@@ -2938,11 +2933,11 @@ mod gif_tests {
     }
 
     #[test]
-    fn gif_blends_only_uneven_ratios() {
-        assert!(gif_frames_chain(20.0, 60.0, 480).contains("[vout]fps=20"));
-        assert!(gif_frames_chain(25.0, 50.0, 480).contains("[vout]fps=25"));
-        assert!(gif_frames_chain(25.0, 60.0, 480).contains("framerate=fps=25"));
-        assert!(gif_frames_chain(25.0, 29.97, 480).contains("framerate=fps=25"));
+    fn gif_frames_are_resampled_by_time() {
+        assert_eq!(
+            gif_frames_chain(25.0, 480),
+            "[vout]framerate=fps=25.0000,scale=480:-1:flags=lanczos"
+        );
     }
 }
 

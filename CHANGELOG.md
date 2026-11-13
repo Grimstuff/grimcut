@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- GIF export: Export → GIF… now saves the timeline as a looping GIF. Pick the width (320 to 800 px or full size) and frame rate (10, 20, 25, 33 or 50 fps: GIF times frames in whole hundredths of a second, so these are the rates that play evenly; others are rounded down to one). When the GIF rate doesn't divide the video's rate evenly, neighbouring frames are blended so motion stays smooth instead of skipping. It builds one colour palette from the whole clip first, then dithers every frame onto it, so gradients and skin tones stay clean instead of banding. Burned-in subtitles, text and canvas layout come along; sound is dropped. A save path ending in .gif from the agent CLI or MCP exports a GIF too.
+- GIF export: Export → GIF… now saves the timeline as a looping GIF. Pick the width (320 to 800 px or full size) and frame rate (10, 20, 25, 33 or 50 fps: GIF times frames in whole hundredths of a second, so these are the rates that play evenly; others are rounded down to one). Each GIF frame is taken at its real time, blending the two nearest video frames when needed, so motion stays smooth instead of skipping or repeating. It builds one colour palette from the whole clip first, then dithers every frame onto it, so gradients and skin tones stay clean instead of banding. Burned-in subtitles, text and canvas layout come along; sound is dropped. A save path ending in .gif from the agent CLI or MCP exports a GIF too.
 
 ## 0.2.13
 
