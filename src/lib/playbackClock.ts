@@ -429,3 +429,8 @@ export function startPlaybackClock() {
     w[RAF_KEY] = undefined;
   };
 }
+
+/** The live <video> for a canvas layer (preview only). */
+export function layerVideo(layer: "base" | "over"): HTMLVideoElement | null {
+  return layer === "over" ? overlayEl : videoEl;
+}

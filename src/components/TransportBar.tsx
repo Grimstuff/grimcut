@@ -3,6 +3,7 @@ import { FONT_SIZE_STEPS, RES_BY_AR, arOf, motionTarget, stepFontSize, visualFon
 import type { AnimChannels, AnimKey, Clip, TextAlign } from "../core/types";
 import { SUB_PICK_ID, SUBTITLE_FONTS, SUBTITLE_SWATCHES, audioTrackLabel, audioTracks, formatTime, textSubtitleTracks } from "../core/types";
 import { timelineDuration } from "../core/project";
+import { autoKeyColor, KeyProps } from "./KeyProps";
 import { useEditor } from "../store/editorStore";
 import { ColorPop, TextColorPop } from "./TextColorPop";
 import { COMMON_FONTS, listSystemFonts } from "../lib/systemFonts";
@@ -962,6 +963,10 @@ export function TransportBar() {
     selected && selectedEffectId
       ? (selected.effects?.find((e) => e.id === selectedEffectId && e.kind === "blur") ?? null)
       : null;
+  const keyFx =
+    selected && selectedEffectId
+      ? (selected.effects?.find((e) => e.id === selectedEffectId && e.kind === "key") ?? null)
+      : null;
 
   const applyTyped = () => {
     const parsed = parseRes(resText);
@@ -974,6 +979,8 @@ export function TransportBar() {
       <div className="tl-bar-left">
         {motionKey ? (
           <MotionKeyProps clip={motionKey.clip} k={motionKey.key} />
+        ) : keyFx && selected ? (
+          <KeyProps clip={selected} fx={keyFx} />
         ) : blurFx ? (
           <div className="tb-props">
             <span className="tb-prop-label">Blur</span>
@@ -1263,6 +1270,26 @@ export function TransportBar() {
                 }}
               >
                 Gaussian blur
+              </button>
+              <button
+                type="button"
+                title="Remove a green or blue screen"
+                onClick={() => {
+                  setFxOpen(false);
+                  const st = useEditor.getState();
+                  const had = new Set(st.project?.clips.flatMap((c) => c.effects?.map((e) => e.id) ?? []));
+                  st.addEffect("key");
+                  // New key: start from the screen color in the current frame.
+                  const s2 = useEditor.getState();
+                  const clip = s2.project?.clips.find((c) => c.id === s2.selectedId);
+                  const fx = clip?.effects?.find((e) => e.kind === "key");
+                  if (clip && fx && !had.has(fx.id)) {
+                    const hex = autoKeyColor(clip);
+                    if (hex) s2.setKeyParams(fx.id, { color: hex });
+                  }
+                }}
+              >
+                Chroma key
               </button>
             </div>
           ) : null}

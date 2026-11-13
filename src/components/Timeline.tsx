@@ -856,14 +856,14 @@ function ClipView({
               key={fx.id}
               type="button"
               className={`clip-fx-btn${selectedEffectId === fx.id ? " is-on" : ""}`}
-              title={fx.kind === "blur" ? "Gaussian blur — click to select" : fx.kind}
+              title={fx.kind === "blur" ? "Gaussian blur — click to select" : "Chroma key — click to select"}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
                 useEditor.getState().selectEffect(clip.id, fx.id);
               }}
             >
-              <IconClipBlur />
+              {fx.kind === "key" ? <IconClipKey color={fx.key?.color} /> : <IconClipBlur />}
             </button>
           ))}
         </span>
@@ -883,6 +883,15 @@ function IconClipBlur() {
     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
       <circle cx="4" cy="5" r="2.2" fill="currentColor" opacity="0.35" />
       <circle cx="6.2" cy="5" r="2.2" fill="currentColor" opacity="0.7" />
+    </svg>
+  );
+}
+
+function IconClipKey({ color }: { color?: string }) {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+      <rect x="1" y="1" width="8" height="8" rx="1.5" fill={color ?? "#00b140"} />
+      <circle cx="5" cy="5" r="2" fill="currentColor" />
     </svg>
   );
 }

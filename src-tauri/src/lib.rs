@@ -1,4 +1,5 @@
 mod agent;
+mod ck;
 mod filmstrip;
 mod windows_sizing;
 
@@ -95,6 +96,25 @@ pub struct CompLayerDto {
     pub src_height: i32,
     #[serde(default)]
     pub blur: f64,
+    #[serde(default)]
+    pub key: Option<KeyDto>,
+}
+
+/// Chroma key settings, same meaning as `KeyParams` in src/core/types.ts.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyDto {
+    pub color: String,
+    #[serde(default)]
+    pub similarity: f64,
+    #[serde(default)]
+    pub blend: f64,
+    #[serde(default)]
+    pub choke: f64,
+    #[serde(default)]
+    pub feather: f64,
+    #[serde(default)]
+    pub spill: f64,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2746,6 +2766,61 @@ fn contrast_ink(hex: &str) -> &'static str {
     }
 }
 
+/// `#rrggbb` → (r, g, b); bad input falls back to chroma green.
+fn hex_rgb(hex: &str) -> (u8, u8, u8) {
+    let h = hex.trim().trim_start_matches('#');
+    if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return (0, 177, 64);
+    }
+    let p = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0);
+    (p(0), p(2), p(4))
+}
+
+/// Blue screen (vs green): picks the despill channel and CorridorKey's blue model.
+pub(crate) fn key_is_blue(hex: &str) -> bool {
+    let (r, g, b) = hex_rgb(hex);
+    b > g && b > r
+}
+
+/// Chroma key chain inserted right after a layer's trim (source resolution), starting with a
+/// comma. Mirrors the preview shader in src/lib/keyGl.ts: RGB → BT.601 full-range YUV so the
+/// key color's chroma matches, `chromakey`, then choke (erosion) / feather (gblur) on the
+/// matte alone, then `despill` toward the mean of the other two channels.
+pub(crate) fn key_filter(k: &KeyDto, lab: &str) -> String {
+    let (r, g, b) = hex_rgb(&k.color);
+    let sim = k.similarity.clamp(0.0001, 1.0);
+    let blend = k.blend.clamp(0.0, 1.0);
+    let mut out = format!(
+        ",format=gbrap,scale=out_color_matrix=bt601:out_range=pc,format=yuva444p,chromakey=color=0x{r:02x}{g:02x}{b:02x}:similarity={sim:.4}:blend={blend:.4}"
+    );
+    let choke = k.choke.clamp(0.0, 8.0).round() as usize;
+    let feather = k.feather.clamp(0.0, 8.0);
+    if choke > 0 || feather > 0.05 {
+        let mut matte = String::from("alphaextract");
+        for _ in 0..choke {
+            matte.push_str(",erosion");
+        }
+        if feather > 0.05 {
+            matte.push_str(&format!(",gblur=sigma={feather:.2}"));
+        }
+        out.push_str(&format!(
+            ",split[{lab}ka][{lab}kb];[{lab}kb]{matte}[{lab}km];[{lab}ka][{lab}km]alphamerge"
+        ));
+    }
+    let spill = k.spill.clamp(0.0, 1.0);
+    if spill > 0.001 {
+        let green = g >= b && g > r;
+        let blue = key_is_blue(&k.color);
+        if green || blue {
+            let (ty, gs, bs) = if green { ("green", -spill, 0.0) } else { ("blue", 0.0, -spill) };
+            out.push_str(&format!(
+                ",format=gbrap,despill=type={ty}:mix=0.5:expand=0:red=0:green={gs:.3}:blue={bs:.3}:brightness=0:alpha=0"
+            ));
+        }
+    }
+    out
+}
+
 fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
     let w = even_dim(plan.width.unwrap_or(1920), 1920);
     let h = even_dim(plan.height.unwrap_or(1080), 1080);
@@ -2797,18 +2872,19 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
             };
             let sub = burn_prefix(&layer.source_path, &burn, plan);
             let (idx, sub) = seek_video_input(&inputs, &mut seeked, idx, &layer.source_path, start, &sub);
+            let key = layer.key.as_ref().map(|k| key_filter(k, &lab)).unwrap_or_default();
             if rot.abs() > 0.05 {
                 fc.push_str(&format!(
-                    "[{idx}:v]{sub}trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={dw}:{dh}:flags=bicubic,format=rgba,rotate={rad:.6}:ow=rotw(iw):oh=roth(ih):c=none{blur}[{lab}];",
+                    "[{idx}:v]{sub}trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS{key},scale={dw}:{dh}:flags=bicubic,format=rgba,rotate={rad:.6}:ow=rotw(iw):oh=roth(ih):c=none{blur}[{lab}];",
                     rad = rot * std::f64::consts::PI / 180.0
                 ));
             } else if !blur.is_empty() {
                 fc.push_str(&format!(
-                    "[{idx}:v]{sub}trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={dw}:{dh}:flags=bicubic,format=rgba{blur}[{lab}];"
+                    "[{idx}:v]{sub}trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS{key},scale={dw}:{dh}:flags=bicubic,format=rgba{blur}[{lab}];"
                 ));
             } else {
                 fc.push_str(&format!(
-                    "[{idx}:v]{sub}trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS,scale={dw}:{dh}:flags=bicubic,format=rgba[{lab}];"
+                    "[{idx}:v]{sub}trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS{key},scale={dw}:{dh}:flags=bicubic,format=rgba[{lab}];"
                 ));
             }
             let out = if j + 1 == slice.layers.len() {
@@ -2916,6 +2992,38 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
     let filter_arg = filter_path.to_string_lossy().into_owned();
     run_filtered_encode(app, ffmpeg, plan, &inputs, &seeked, &filter_arg, &work, fps)
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    fn k(color: &str, choke: f64, feather: f64, spill: f64) -> KeyDto {
+        KeyDto { color: color.into(), similarity: 0.12, blend: 0.08, choke, feather, spill }
+    }
+
+    #[test]
+    fn plain_key_is_one_chain() {
+        let f = key_filter(&k("#00b140", 0.0, 0.0, 0.8), "l0_1");
+        assert!(f.starts_with(",format=gbrap,scale=out_color_matrix=bt601"));
+        assert!(f.contains("chromakey=color=0x00b140:similarity=0.1200:blend=0.0800"));
+        assert!(f.contains("despill=type=green") && f.contains("green=-0.800"));
+        assert!(!f.contains("split"));
+    }
+
+    #[test]
+    fn choke_and_feather_work_on_the_matte() {
+        let f = key_filter(&k("#1030e0", 2.0, 1.5, 0.5), "l3_1");
+        assert!(f.contains("[l3_1kb]alphaextract,erosion,erosion,gblur=sigma=1.50[l3_1km]"));
+        assert!(f.contains("[l3_1ka][l3_1km]alphamerge"));
+        assert!(f.contains("despill=type=blue") && f.contains("blue=-0.500"));
+    }
+
+    #[test]
+    fn non_screen_colors_skip_despill() {
+        let f = key_filter(&k("#d02020", 0.0, 0.0, 1.0), "x");
+        assert!(!f.contains("despill"));
+    }
 }
 
 #[cfg(test)]
@@ -3135,6 +3243,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ck::ck_status,
+            ck::ck_install,
+            ck::ck_run,
+            ck::ck_cancel,
+            ck::ck_uninstall,
             probe,
             waveform,
             suggest_save,
