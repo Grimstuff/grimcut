@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FONT_SIZE_STEPS, RES_BY_AR, arOf, motionTarget, stepFontSize, visualFontSize } from "../core/canvas";
 import type { AnimChannels, AnimKey, Clip, TextAlign } from "../core/types";
 import { SUB_PICK_ID, SUBTITLE_FONTS, SUBTITLE_SWATCHES, audioTrackLabel, audioTracks, formatTime, textSubtitleTracks } from "../core/types";
+import { timelineDuration } from "../core/project";
 import { useEditor } from "../store/editorStore";
 import { ColorPop, TextColorPop } from "./TextColorPop";
 import { COMMON_FONTS, listSystemFonts } from "../lib/systemFonts";
@@ -96,6 +97,8 @@ function seekTo(t: number) {
   syncPreviewToPlayhead();
 }
 
+const GIF_WIDTHS = [320, 480, 640, 800];
+const GIF_FPS = [10, 12, 15, 20, 25, 30];
 const LCD_MAX = [2, 2, 2, 3] as const;
 const LCD_KEYS = ["h", "m", "s", "ms"] as const;
 
@@ -868,6 +871,9 @@ export function TransportBar() {
   const [manCrf, setManCrf] = useState(20);
   const [manPreset, setManPreset] = useState("medium");
   const [manAudio, setManAudio] = useState("192k");
+  const [gifOpen, setGifOpen] = useState(false);
+  const [gifWidth, setGifWidth] = useState(480);
+  const [gifFps, setGifFps] = useState(15);
   const wrap = useRef<HTMLDivElement>(null);
   const canvasPop = useRef<HTMLDivElement>(null);
   const fxPop = useRef<HTMLDivElement>(null);
@@ -897,6 +903,7 @@ export function TransportBar() {
       if (!exportPop.current?.contains(t)) {
         setExportOpen(false);
         setManualOpen(false);
+        setGifOpen(false);
       }
     };
     document.addEventListener("mousedown", onDoc);
@@ -1358,6 +1365,7 @@ export function TransportBar() {
             onClick={() => {
               setExportOpen((v) => !v);
               setManualOpen(false);
+              setGifOpen(false);
               setCanvasOpen(false);
               setFxOpen(false);
               setSubOpen(false);
@@ -1394,6 +1402,7 @@ export function TransportBar() {
                 className={manualOpen ? "is-on" : ""}
                 disabled={busy}
                 onClick={() => {
+                  setGifOpen(false);
                   setManualOpen((v) => {
                     const next = !v;
                     if (next) useEditor.getState().primeExportCodecs();
@@ -1475,14 +1484,56 @@ export function TransportBar() {
               ) : null}
               <button
                 type="button"
-                title="Coming later"
+                className={gifOpen ? "is-on" : ""}
+                disabled={busy}
                 onClick={() => {
-                  setExportOpen(false);
-                  useEditor.setState({ status: "GIF export coming later." });
+                  setManualOpen(false);
+                  setGifOpen((v) => !v);
                 }}
               >
-                GIF
+                GIF…
               </button>
+              {gifOpen ? (
+                <div className="tb-export-manual">
+                  <label>
+                    Width
+                    <select value={gifWidth} onChange={(e) => setGifWidth(Number(e.target.value))}>
+                      {GIF_WIDTHS.filter((w) => w < project.canvasWidth).map((w) => (
+                        <option key={w} value={w}>
+                          {w} px
+                        </option>
+                      ))}
+                      <option value={0}>Full ({project.canvasWidth} px)</option>
+                    </select>
+                  </label>
+                  <label>
+                    Frame rate
+                    <select value={gifFps} onChange={(e) => setGifFps(Number(e.target.value))}>
+                      {GIF_FPS.map((f) => (
+                        <option key={f} value={f}>
+                          {f} fps
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {timelineDuration(project) > 30 ? (
+                    <div className="tb-export-note">Long GIFs get big. Trim to a short moment first.</div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="tb-export-go"
+                    disabled={busy}
+                    onClick={() => {
+                      setExportOpen(false);
+                      setGifOpen(false);
+                      const w = gifWidth > 0 && gifWidth < project.canvasWidth ? gifWidth : undefined;
+                      void useEditor.getState().exportVideo({ profile: "gif", gifWidth: w, gifFps });
+                    }}
+                  >
+                    Export GIF
+                  </button>
+                </div>
+              ) : null}
               <button
                 type="button"
                 className="tb-export-quick"

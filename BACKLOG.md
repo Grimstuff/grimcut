@@ -6,7 +6,6 @@ Parked work and later slices. Core clip editing (open, cut, preview, export) is 
 
 - **Bake motion keys on export** — keys (pan/rotate/scale on a clip) edit and interpolate in preview, but export still uses the clip's static transform. Do not call GOP ticks “keyframes” in this UI.
 - **Save project** — hamburger still a stub.
-- **GIF export** — flyout item is a placeholder.
 - **Record** — disabled chrome only.
 - **Muxed subtitle tracks** — burn-in only for now.
 - **Bitmap / closed-caption subs** (PGS, CEA-608) — out of scope unless we explicitly take them on.

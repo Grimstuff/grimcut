@@ -65,7 +65,7 @@ const tools = [
     description: "Export. Headless requires outputPath and currently supports a single remaining video clip. Multi-clip/overlay needs the Grimcut app running.",
     inputSchema: {
       type: "object",
-      properties: { outputPath: { type: "string" }, profile: { type: "string", description: "quick | youtube | discord | manual" } },
+      properties: { outputPath: { type: "string" }, profile: { type: "string", description: "quick | youtube | discord | manual | gif (an outputPath ending in .gif also exports a GIF)" } },
       required: ["outputPath"],
     },
   },

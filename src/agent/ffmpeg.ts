@@ -133,6 +133,11 @@ export async function exportSimple(project: VideoProject, dest: string): Promise
   const vid = project.clips.filter((c) => c.kind === "video").sort((a, b) => a.timelineStart - b.timelineStart);
   if (!vid.length) throw new Error("No video to export.");
   const first = vid[0];
+  if (vid.length === 1 && /\.gif$/i.test(dest)) {
+    const { stderr, code } = await runTool(ffmpegBin("ffmpeg"), gifArgs(clipSourcePath(project, first), first.sourceStart, first.sourceEnd, dest));
+    if (code !== 0) throw new Error(stderr.trim() || "GIF export failed.");
+    return;
+  }
   if (vid.length === 1) {
     const { stderr, code } = await runTool(ffmpegBin("ffmpeg"), [
       "-hide_banner",
@@ -151,4 +156,27 @@ export async function exportSimple(project: VideoProject, dest: string): Promise
     return;
   }
   throw new Error("Headless export currently supports a single remaining video clip. Open Grimcut for multi-clip / overlay export, or flatten to one clip first.");
+}
+
+/** One-pass palette GIF (15 fps, at most 640 px wide) of a source span, for headless export. */
+export function gifArgs(src: string, start: number, end: number, dest: string, fps = 15, maxWidth = 640): string[] {
+  const chain =
+    `fps=${fps},scale='min(iw,${maxWidth})':-1:flags=lanczos,split[a][b];` +
+    `[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle`;
+  return [
+    "-hide_banner",
+    "-y",
+    "-ss",
+    String(start),
+    "-t",
+    String(Math.max(0.05, end - start)),
+    "-i",
+    src,
+    "-filter_complex",
+    chain,
+    "-an",
+    "-loop",
+    "0",
+    dest,
+  ];
 }

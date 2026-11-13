@@ -187,6 +187,19 @@ pub struct ExportPlan {
     pub encoder: Option<String>,
     #[serde(default)]
     pub x264_preset: Option<String>,
+    /// GIF export: frames per second (default 15).
+    #[serde(default)]
+    pub gif_fps: Option<f64>,
+    /// GIF export: output width in pixels, height follows the aspect
+    /// (None = canvas width).
+    #[serde(default)]
+    pub gif_width: Option<i32>,
+}
+
+impl ExportPlan {
+    fn is_gif(&self) -> bool {
+        self.encoder.as_deref() == Some("gif")
+    }
 }
 
 #[derive(Serialize)]
@@ -388,6 +401,21 @@ fn run_ffmpeg_progress(
     total_sec: f64,
     label: &str,
 ) -> Result<(String, i32), String> {
+    run_ffmpeg_progress_span(app, ffmpeg, args, total_sec, label, 0.0, 100.0)
+}
+
+/// Like `run_ffmpeg_progress`, but maps the run onto `lo..hi` of the bar
+/// (for exports that take more than one FFmpeg pass).
+fn run_ffmpeg_progress_span(
+    app: &AppHandle,
+    ffmpeg: &Path,
+    args: &[String],
+    total_sec: f64,
+    label: &str,
+    lo: f64,
+    hi: f64,
+) -> Result<(String, i32), String> {
+    let span = |sec: f64| lo + (sec / total_sec).clamp(0.0, 1.0) * (hi - lo);
     CANCEL.store(false, Ordering::SeqCst);
     kill_job();
     CANCEL.store(false, Ordering::SeqCst);
@@ -443,14 +471,14 @@ fn run_ffmpeg_progress(
                         } else {
                             raw / 1000.0
                         };
-                        emit_prog(app, label, (sec / total_sec) * 100.0);
+                        emit_prog(app, label, span(sec));
                     }
                 }
             } else if let Some(v) = line.strip_prefix("out_time=") {
                 // HH:MM:SS.micro
                 if let Some(sec) = parse_out_time(v) {
                     if total_sec > 0.05 {
-                        emit_prog(app, label, (sec / total_sec) * 100.0);
+                        emit_prog(app, label, span(sec));
                     }
                 }
             }
@@ -1375,6 +1403,155 @@ fn run_filtered_encode(
     Err(last_err)
 }
 
+/// GIF frame rate and width for a plan: 15 fps and the canvas width unless
+/// the plan asks otherwise, never above the timeline's own rate or size.
+fn gif_dims(plan: &ExportPlan, canvas_w: i32, fps: f64) -> (f64, i32) {
+    let want = plan.gif_fps.filter(|f| *f >= 1.0).unwrap_or(15.0).min(50.0);
+    let gif_fps = want.min(fps.max(1.0));
+    let width = plan
+        .gif_width
+        .filter(|w| *w >= 16)
+        .unwrap_or(canvas_w)
+        .min(canvas_w.max(16));
+    (gif_fps, width)
+}
+
+/// The filter chain that turns the timeline's `[vout]` into GIF-sized frames.
+fn gif_frames_chain(gif_fps: f64, width: i32) -> String {
+    format!("[vout]fps={gif_fps:.4},scale={width}:-1:flags=lanczos")
+}
+
+/// Two-pass GIF: pass 1 builds one 256-colour palette from the whole
+/// timeline (palettegen, weighted to moving areas), pass 2 maps every frame
+/// onto it with error-diffusion dithering (paletteuse). One pass with
+/// `split` would hold every frame in memory until the palette is ready.
+fn run_gif_encode(
+    app: &AppHandle,
+    ffmpeg: &Path,
+    plan: &ExportPlan,
+    inputs: &[String],
+    seeked: &[(String, f64)],
+    fc: &str,
+    work: &Path,
+    canvas_w: i32,
+    fps: f64,
+) -> Result<String, String> {
+    let result = gif_passes(app, ffmpeg, plan, inputs, seeked, fc, work, canvas_w, fps);
+    let _ = fs::remove_dir_all(work);
+    result
+}
+
+fn gif_passes(
+    app: &AppHandle,
+    ffmpeg: &Path,
+    plan: &ExportPlan,
+    inputs: &[String],
+    seeked: &[(String, f64)],
+    fc: &str,
+    work: &Path,
+    canvas_w: i32,
+    fps: f64,
+) -> Result<String, String> {
+    let dur = plan_secs(plan).max(0.05);
+    let (gif_fps, width) = gif_dims(plan, canvas_w, fps);
+    let base = fc.trim_end_matches(';');
+    let frames = gif_frames_chain(gif_fps, width);
+    let mut input_args: Vec<String> = Vec::new();
+    for (inp, ss) in inputs
+        .iter()
+        .map(|p| (p, 0.0))
+        .chain(seeked.iter().map(|(p, ss)| (p, *ss)))
+    {
+        if ss > 0.0 {
+            input_args.push("-ss".into());
+            input_args.push(format!("{ss:.6}"));
+        }
+        input_args.push("-i".into());
+        input_args.push(inp.clone());
+    }
+    let palette_idx = inputs.len() + seeked.len();
+    let palette = work.join("palette.png");
+
+    // Pass 1: palette. The null output only keeps the progress bar moving
+    // (the palette itself is written once, at the end).
+    let f1 = work.join("gif-palette.txt");
+    fs::write(
+        &f1,
+        format!("{base};{frames},split[gp][gn];[gp]palettegen=stats_mode=diff[pal]"),
+    )
+    .map_err(|e| e.to_string())?;
+    let label1 = "GIF: building colour palette…";
+    emit_prog(app, label1, 0.0);
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
+    args.extend(input_args.iter().cloned());
+    args.extend([
+        "-/filter_complex".into(),
+        f1.to_string_lossy().into_owned(),
+        "-map".into(),
+        "[pal]".into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-update".into(),
+        "1".into(),
+        palette.to_string_lossy().into_owned(),
+        "-map".into(),
+        "[gn]".into(),
+        "-f".into(),
+        "null".into(),
+        "-".into(),
+    ]);
+    let (err, code) = run_ffmpeg_progress_span(app, ffmpeg, &args, dur, label1, 0.0, 40.0)?;
+    if code != 0 || !palette.exists() {
+        return Err(trim_ffmpeg_err(&err));
+    }
+
+    // Pass 2: frames mapped onto the palette.
+    let f2 = work.join("gif-encode.txt");
+    fs::write(
+        &f2,
+        format!(
+            "{base};{frames}[gx];[gx][{palette_idx}:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle[vgif]"
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    let label2 = "GIF: encoding…";
+    emit_prog(app, label2, 40.0);
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
+    args.extend(input_args);
+    args.extend([
+        "-i".into(),
+        palette.to_string_lossy().into_owned(),
+        "-/filter_complex".into(),
+        f2.to_string_lossy().into_owned(),
+        "-map".into(),
+        "[vgif]".into(),
+        "-an".into(),
+        "-sn".into(),
+        "-dn".into(),
+        "-map_chapters".into(),
+        "-1".into(),
+        "-c:v".into(),
+        "gif".into(),
+        "-loop".into(),
+        "0".into(),
+        plan.output_path.clone(),
+    ]);
+    let (err, code) = run_ffmpeg_progress_span(app, ffmpeg, &args, dur, label2, 40.0, 100.0)?;
+    if code != 0 {
+        return Err(trim_ffmpeg_err(&err));
+    }
+    emit_prog(app, "GIF saved.", 100.0);
+    Ok(format!("{width} px wide, {} fps", fmt_fps(gif_fps)))
+}
+
+fn fmt_fps(f: f64) -> String {
+    if (f - f.round()).abs() < 0.01 {
+        format!("{}", f.round() as i64)
+    } else {
+        format!("{f:.2}")
+    }
+}
+
 /// The libvpx decoder to force for a WebM whose first video stream has an
 /// alpha layer, or None to let FFmpeg pick its native decoder.
 fn vpx_alpha_decoder(ffprobe: &Path, path: &str) -> Option<&'static str> {
@@ -1974,7 +2151,18 @@ async fn export_video(app: AppHandle, plan: ExportPlan) -> Result<ExportResultDt
 }
 
 fn export_video_sync(app: AppHandle, mut plan: ExportPlan) -> Result<ExportResultDto, String> {
-    plan.output_path = h264_safe_output(&plan.output_path);
+    let gif = plan.is_gif();
+    if gif {
+        // GIF has no sound and is always re-encoded.
+        plan.output_path = PathBuf::from(&plan.output_path)
+            .with_extension("gif")
+            .to_string_lossy()
+            .into_owned();
+        plan.has_audio = false;
+        plan.use_stream_copy = false;
+    } else {
+        plan.output_path = h264_safe_output(&plan.output_path);
+    }
     emit_prog(&app, "Starting export…", 2.0);
     let ffmpeg = ffmpeg_bin(&app, "ffmpeg");
     if plan.clips.is_empty() {
@@ -2002,6 +2190,15 @@ fn export_video_sync(app: AppHandle, mut plan: ExportPlan) -> Result<ExportResul
 
     emit_prog(&app, "Encoding…", 4.0);
     let used = export_reencode(&app, &ffmpeg, &plan)?;
+    if gif {
+        return Ok(ExportResultDto {
+            success: true,
+            output_path: plan.output_path.clone(),
+            mode: "gif".into(),
+            clip_count: plan.clips.len(),
+            message: format!("Saved GIF ({used})."),
+        });
+    }
     let mut note = String::new();
     if plan.has_audio {
         let ffprobe = ffmpeg_bin(&app, "ffprobe");
@@ -2631,6 +2828,9 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
     ));
 
     append_audio_mix(&mut fc, &inputs, &mut seeked, plan);
+    if plan.is_gif() {
+        return run_gif_encode(app, ffmpeg, plan, &inputs, &seeked, &fc, &work, w, fps);
+    }
 
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
@@ -2694,6 +2894,9 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     ));
 
     append_audio_mix(&mut fc, &inputs, &mut seeked, plan);
+    if plan.is_gif() {
+        return run_gif_encode(app, ffmpeg, plan, &inputs, &seeked, &fc, &work, w, fps);
+    }
 
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;

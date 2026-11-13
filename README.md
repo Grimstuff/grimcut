@@ -2,7 +2,7 @@
 
 A simple Fluent-style video editor (ocenaudio vibe): drop a file, cut on a timeline, save.
 
-Desktop app built with **Tauri 2 + React**, same family as [Grimpad](https://github.com/Grimstuff/grimpad). Local files only; FFmpeg does probe and export (stream copy on keyframe cuts, otherwise high-quality / GPU encode).
+Desktop app built with **Tauri 2 + React**, same family as [Grimpad](https://github.com/Grimstuff/grimpad). Local files only; FFmpeg does probe and export (stream copy on keyframe cuts, otherwise high-quality / GPU encode; GIF export with a per-clip colour palette).
 
 ## Requirements
 
@@ -63,7 +63,7 @@ npm run grimcut -- collapse-blank
 npm run grimcut -- export D:\clip-cut.mp4
 ```
 
-MCP stdio: `npm run mcp` (tools `grimcut_open`, `grimcut_delete_range`, `grimcut_collapse_blank`, `grimcut_frame`, `grimcut_export`, …). If Grimcut is already open, the CLI/MCP drive that instance through `%LOCALAPPDATA%\Grimcut\agent.json`, so the UI stays in sync. Otherwise they run the same core headless. Headless export handles a single remaining video clip (stream copy); multi-clip, overlay and burn-in need the app.
+MCP stdio: `npm run mcp` (tools `grimcut_open`, `grimcut_delete_range`, `grimcut_collapse_blank`, `grimcut_frame`, `grimcut_export`, …). If Grimcut is already open, the CLI/MCP drive that instance through `%LOCALAPPDATA%\Grimcut\agent.json`, so the UI stays in sync. Otherwise they run the same core headless. Headless export handles a single remaining video clip (stream copy, or a palette GIF when the path ends in .gif); multi-clip, overlay and burn-in need the app.
 
 ## License
 
