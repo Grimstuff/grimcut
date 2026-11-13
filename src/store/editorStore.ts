@@ -71,7 +71,7 @@ export type DropGhost = {
 };
 
 export type ExportOpts = {
-  profile?: "quick" | "discord" | "youtube" | "manual";
+  profile?: "quick" | "discord" | "youtube" | "manual" | "gif";
   encoder?: string;
   crf?: number;
   preset?: string;
@@ -79,6 +79,10 @@ export type ExportOpts = {
   width?: number;
   height?: number;
   outputPath?: string;
+  /** GIF only: frames per second (default 25). */
+  gifFps?: number;
+  /** GIF only: width in pixels, height follows (default: canvas width). */
+  gifWidth?: number;
 };
 
 function scaleToMaxH(w: number, h: number, maxH: number) {
@@ -1525,18 +1529,27 @@ export const useEditor = create<EditorState>((set, get) => ({
   exportVideo: async (opts) => {
     const { project, media, busy, burnSubs, burnSubIndex, subStyle, audioTrackIndex } = get();
     if (!project || !media || busy) return;
-    const profile = opts?.profile ?? "quick";
     const suggested = await invoke<string>("suggest_save", { path: project.sourcePath });
     const dest =
       opts?.outputPath ||
-      (await save({
-        defaultPath: suggested.replace(/\.(webm|gif)$/i, ".mp4"),
-        filters: [
-          { name: "MP4", extensions: ["mp4"] },
-          { name: "MKV", extensions: ["mkv"] },
-        ],
-      }));
+      (await save(
+        opts?.profile === "gif"
+          ? {
+              defaultPath: suggested.replace(/\.[^.\\/]+$/, ".gif"),
+              filters: [{ name: "GIF", extensions: ["gif"] }],
+            }
+          : {
+              defaultPath: suggested.replace(/\.(webm|gif)$/i, ".mp4"),
+              filters: [
+                { name: "MP4", extensions: ["mp4"] },
+                { name: "MKV", extensions: ["mkv"] },
+              ],
+            },
+      ));
     if (!dest) return;
+    // A .gif destination (e.g. from the agent CLI) is a GIF export whatever the profile.
+    const profile = /\.gif$/i.test(dest) ? "gif" : (opts?.profile ?? "quick");
+    const gif = profile === "gif";
     const clips = flattenKind(project, "video");
     const audioClips = flattenKind(project, "audio", "base");
     const audioOverlay = flattenKind(project, "audio", "over");
@@ -1572,6 +1585,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const subTrack = textSubtitleTracks(media).find((s) => s.index === burnSubIndex);
     const willBurn = burnSubs && !!subTrack;
     const useStreamCopy =
+      !gif &&
       profile === "quick" &&
       !willBurn &&
       !hasGap &&
@@ -1616,9 +1630,15 @@ export const useEditor = create<EditorState>((set, get) => ({
       vBits = Math.min(vBits, 6_000_000);
       videoBitrate = `${Math.round(vBits / 1000)}k`;
       audioBitrate = "128k";
+    } else if (gif) {
+      encoder = "gif";
+      crf = null;
+      x264Preset = null;
     }
     const label =
-      profile === "discord"
+      gif
+        ? "Exporting GIF…"
+        : profile === "discord"
         ? "Exporting for Discord…"
         : profile === "youtube"
           ? "Exporting for YouTube…"
@@ -1638,7 +1658,7 @@ export const useEditor = create<EditorState>((set, get) => ({
           clips,
           audioClips,
           audioOverlay: hasOverAudio ? audioOverlay : [],
-          hasAudio: hasAudioClips,
+          hasAudio: hasAudioClips && !gif,
           audioStream: audioTracks(media).length > 1 && audioTrackIndex >= 0 ? audioTrackIndex : null,
           videoCodec: media.videoCodec,
           useStreamCopy,
@@ -1652,6 +1672,8 @@ export const useEditor = create<EditorState>((set, get) => ({
           crf,
           encoder: encoder === "auto" ? null : encoder,
           x264Preset,
+          gifFps: gif ? (opts?.gifFps ?? 25) : null,
+          gifWidth: gif ? (opts?.gifWidth ?? null) : null,
           burnSubs: willBurn,
           subtitleStream: willBurn && subTrack && subTrack.index >= 0 ? subTrack.index : null,
           subtitleFile: willBurn ? (subTrack?.sidecar ?? null) : null,
