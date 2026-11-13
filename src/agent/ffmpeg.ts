@@ -158,10 +158,10 @@ export async function exportSimple(project: VideoProject, dest: string): Promise
   throw new Error("Headless export currently supports a single remaining video clip. Open Grimcut for multi-clip / overlay export, or flatten to one clip first.");
 }
 
-/** One-pass palette GIF (15 fps, at most 640 px wide) of a source span, for headless export. */
-export function gifArgs(src: string, start: number, end: number, dest: string, fps = 15, maxWidth = 640): string[] {
+/** One-pass palette GIF (25 fps, frames blended where the rate does not divide evenly, at most 640 px wide) of a source span, for headless export. */
+export function gifArgs(src: string, start: number, end: number, dest: string, fps = 25, maxWidth = 640): string[] {
   const chain =
-    `fps=${fps},scale='min(iw,${maxWidth})':-1:flags=lanczos,split[a][b];` +
+    `framerate=fps=${fps},scale='min(iw,${maxWidth})':-1:flags=lanczos,split[a][b];` +
     `[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle`;
   return [
     "-hide_banner",

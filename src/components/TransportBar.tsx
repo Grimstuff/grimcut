@@ -98,7 +98,14 @@ function seekTo(t: number) {
 }
 
 const GIF_WIDTHS = [320, 480, 640, 800];
-const GIF_FPS = [10, 12, 15, 20, 25, 30];
+// GIF delays are whole hundredths of a second, so only these rates play evenly.
+const GIF_FPS = [
+  { v: 10, label: "10 fps" },
+  { v: 20, label: "20 fps" },
+  { v: 25, label: "25 fps" },
+  { v: 100 / 3, label: "33 fps" },
+  { v: 50, label: "50 fps" },
+];
 const LCD_MAX = [2, 2, 2, 3] as const;
 const LCD_KEYS = ["h", "m", "s", "ms"] as const;
 
@@ -873,7 +880,7 @@ export function TransportBar() {
   const [manAudio, setManAudio] = useState("192k");
   const [gifOpen, setGifOpen] = useState(false);
   const [gifWidth, setGifWidth] = useState(480);
-  const [gifFps, setGifFps] = useState(15);
+  const [gifFps, setGifFps] = useState(25);
   const wrap = useRef<HTMLDivElement>(null);
   const canvasPop = useRef<HTMLDivElement>(null);
   const fxPop = useRef<HTMLDivElement>(null);
@@ -1510,8 +1517,8 @@ export function TransportBar() {
                     Frame rate
                     <select value={gifFps} onChange={(e) => setGifFps(Number(e.target.value))}>
                       {GIF_FPS.map((f) => (
-                        <option key={f} value={f}>
-                          {f} fps
+                        <option key={f.label} value={f.v}>
+                          {f.label}
                         </option>
                       ))}
                     </select>

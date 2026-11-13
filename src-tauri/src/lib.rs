@@ -1403,11 +1403,11 @@ fn run_filtered_encode(
     Err(last_err)
 }
 
-/// GIF frame rate and width for a plan: 15 fps and the canvas width unless
+/// GIF frame rate and width for a plan: 25 fps and the canvas width unless
 /// the plan asks otherwise, never above the timeline's own rate or size.
 fn gif_dims(plan: &ExportPlan, canvas_w: i32, fps: f64) -> (f64, i32) {
-    let want = plan.gif_fps.filter(|f| *f >= 1.0).unwrap_or(15.0).min(50.0);
-    let gif_fps = want.min(fps.max(1.0));
+    let want = plan.gif_fps.filter(|f| *f >= 1.0).unwrap_or(25.0).min(fps.max(1.0));
+    let gif_fps = gif_exact_fps(want);
     let width = plan
         .gif_width
         .filter(|w| *w >= 16)
@@ -1416,9 +1416,28 @@ fn gif_dims(plan: &ExportPlan, canvas_w: i32, fps: f64) -> (f64, i32) {
     (gif_fps, width)
 }
 
+/// GIF stores each frame's delay in whole hundredths of a second, so 30 fps
+/// (3.33 cs) plays as an uneven 3-3-4 cs judder. Round the delay up to a
+/// whole number of hundredths (never faster than asked): 30 -> 25, 15 -> 14.3,
+/// while 10, 20, 25, 33.3 and 50 stay exact.
+fn gif_exact_fps(want: f64) -> f64 {
+    let cs = (100.0 / want.max(1.0) - 1e-6).ceil().clamp(2.0, 100.0);
+    100.0 / cs
+}
+
 /// The filter chain that turns the timeline's `[vout]` into GIF-sized frames.
-fn gif_frames_chain(gif_fps: f64, width: i32) -> String {
-    format!("[vout]fps={gif_fps:.4},scale={width}:-1:flags=lanczos")
+/// When the GIF rate divides the timeline rate evenly (60 -> 20, 50 -> 25)
+/// every Nth frame is taken as is; otherwise frames are blended at their real
+/// positions (`framerate`) so motion stays even instead of skipping a frame
+/// every so often.
+fn gif_frames_chain(gif_fps: f64, src_fps: f64, width: i32) -> String {
+    let ratio = src_fps / gif_fps;
+    let resample = if (ratio - ratio.round()).abs() < 0.02 {
+        format!("fps={gif_fps:.4}")
+    } else {
+        format!("framerate=fps={gif_fps:.4}")
+    };
+    format!("[vout]{resample},scale={width}:-1:flags=lanczos")
 }
 
 /// Two-pass GIF: pass 1 builds one 256-colour palette from the whole
@@ -1455,7 +1474,7 @@ fn gif_passes(
     let dur = plan_secs(plan).max(0.05);
     let (gif_fps, width) = gif_dims(plan, canvas_w, fps);
     let base = fc.trim_end_matches(';');
-    let frames = gif_frames_chain(gif_fps, width);
+    let frames = gif_frames_chain(gif_fps, fps, width);
     let mut input_args: Vec<String> = Vec::new();
     for (inp, ss) in inputs
         .iter()
@@ -2902,6 +2921,29 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
     let filter_arg = filter_path.to_string_lossy().into_owned();
     run_filtered_encode(app, ffmpeg, plan, &inputs, &seeked, &filter_arg, &work, fps)
+}
+
+#[cfg(test)]
+mod gif_tests {
+    use super::*;
+
+    #[test]
+    fn gif_rates_land_on_whole_hundredths() {
+        assert_eq!(gif_exact_fps(10.0), 10.0);
+        assert_eq!(gif_exact_fps(20.0), 20.0);
+        assert_eq!(gif_exact_fps(25.0), 25.0);
+        assert_eq!(gif_exact_fps(50.0), 50.0);
+        assert_eq!(gif_exact_fps(30.0), 25.0);
+        assert!((gif_exact_fps(100.0 / 3.0 + 0.001) - 100.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gif_blends_only_uneven_ratios() {
+        assert!(gif_frames_chain(20.0, 60.0, 480).contains("[vout]fps=20"));
+        assert!(gif_frames_chain(25.0, 50.0, 480).contains("[vout]fps=25"));
+        assert!(gif_frames_chain(25.0, 60.0, 480).contains("framerate=fps=25"));
+        assert!(gif_frames_chain(25.0, 29.97, 480).contains("framerate=fps=25"));
+    }
 }
 
 #[tauri::command]

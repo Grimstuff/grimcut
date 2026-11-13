@@ -79,7 +79,7 @@ export type ExportOpts = {
   width?: number;
   height?: number;
   outputPath?: string;
-  /** GIF only: frames per second (default 15). */
+  /** GIF only: frames per second (default 25). */
   gifFps?: number;
   /** GIF only: width in pixels, height follows (default: canvas width). */
   gifWidth?: number;
@@ -1672,7 +1672,7 @@ export const useEditor = create<EditorState>((set, get) => ({
           crf,
           encoder: encoder === "auto" ? null : encoder,
           x264Preset,
-          gifFps: gif ? (opts?.gifFps ?? 15) : null,
+          gifFps: gif ? (opts?.gifFps ?? 25) : null,
           gifWidth: gif ? (opts?.gifWidth ?? null) : null,
           burnSubs: willBurn,
           subtitleStream: willBurn && subTrack && subTrack.index >= 0 ? subTrack.index : null,

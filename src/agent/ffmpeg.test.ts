@@ -24,7 +24,7 @@ describe("gifArgs", () => {
     const chain = a[a.indexOf("-filter_complex") + 1];
     expect(chain).toContain("palettegen");
     expect(chain).toContain("paletteuse");
-    expect(chain).toContain("fps=15");
+    expect(chain).toContain("framerate=fps=25");
     expect(a).toContain("-an");
     expect(a.slice(-3)).toEqual(["-loop", "0", "C:/out.gif"]);
   });
