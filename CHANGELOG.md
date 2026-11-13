@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.14
 
 - Chroma key: Effects → Chroma key removes a green or blue screen from a video clip. It finds the screen color in the current frame for you; click the color chip and then the screen in the preview to pick it yourself (it averages a few pixels). Range sets how much counts as screen, Soft blends the edge, Spill takes the green or blue tint off hair and skin, and Edge has Choke (shrink the edge) and Feather (soften it). The preview keys live on the GPU with the same math FFmpeg uses on export, so what you see is what you get.
 - Advanced key: next to the chroma key settings, "Advanced key…" runs CorridorKey, Corridor Digital's AI keyer, on an overlay clip for hair, motion blur and see-through edges. Nothing extra ships with Grimcut: the first time, it offers to set up a private copy (PyTorch, the keyer and its model) in Grimcut's own data folder, about 3 GB with an NVIDIA GPU or about 600 MB for CPU-only, with progress and a Remove button. Your chroma key serves as its rough guide, and the result replaces the clip as a WebM with transparency (Undo brings the original back). Without an NVIDIA GPU it runs on the CPU, which is slow (seconds per frame).
