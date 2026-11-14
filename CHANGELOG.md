@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: when paused, the preview could show a frame 2 to 3 frames away from the playhead on 60 fps video. Stepping one frame with the arrow keys often left the picture where it was, so a cut placed by eye at a shot change ended up a couple of frames early, and the export then showed a short flash of the part you cut out. The paused preview now always shows the exact frame at the playhead, including right after you pause playback and when you step quickly.
+
 ## 0.2.14
 
 - Chroma key: Effects → Chroma key removes a green or blue screen from a video clip. It finds the screen color in the current frame for you; click the color chip and then the screen in the preview to pick it yourself (it averages a few pixels). Range sets how much counts as screen, Soft blends the edge, Spill takes the green or blue tint off hair and skin, and Edge has Choke (shrink the edge) and Feather (soften it). The preview keys live on the GPU with the same math FFmpeg uses on export, so what you see is what you get.
