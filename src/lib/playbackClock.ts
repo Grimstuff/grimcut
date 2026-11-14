@@ -269,6 +269,12 @@ function assignSrc(el: HTMLMediaElement, path: string, url: string) {
   el.dataset.lastSeek = "0";
 }
 
+/** Largest picture/playhead mismatch a paused preview tolerates: well under a frame at 240 fps. */
+const PAUSED_DRIFT = 0.003;
+/** A paused seek lands 1 ms inside the frame that starts at the playhead, so float rounding
+ *  of a frame-start time cannot make the decoder show the previous frame. */
+const FRAME_NUDGE = 0.001;
+
 function seekIfNeeded(el: HTMLMediaElement, srcTime: number, playing: boolean) {
   if (el.dataset.playLock === "1" || el.dataset.recovering === "1") return;
   if (el.error) {
@@ -279,14 +285,19 @@ function seekIfNeeded(el: HTMLMediaElement, srcTime: number, playing: boolean) {
   const user = el.dataset.userSeek === "1";
   const precise = useEditor.getState().scrubPreview != null;
   if (playing && !el.paused && el.readyState >= 2 && !user && !precise) return;
-  const drift = Number.isFinite(el.currentTime) ? Math.abs(el.currentTime - srcTime) : 99;
-  const need = precise || user ? 0.04 : 0.05;
+  // Paused, the picture has to sit on the playhead's own frame: it is what the user cuts by.
+  // A 0.04s dead zone is 2.4 frames at 60 fps, so frame steps did not move the picture and
+  // cuts placed by eye landed 2-3 frames off what the export (and FFmpeg) actually cut.
+  let target = playing ? srcTime : srcTime + FRAME_NUDGE;
+  if (Number.isFinite(el.duration) && el.duration > 0) target = Math.min(target, el.duration);
+  const drift = Number.isFinite(el.currentTime) ? Math.abs(el.currentTime - target) : 99;
+  const need = !playing ? PAUSED_DRIFT : precise || user ? 0.04 : 0.05;
   const last = Number(el.dataset.lastSeek || 0);
   if (drift > need && performance.now() - last > (precise ? 20 : 80)) {
     el.dataset.lastSeek = String(performance.now());
     el.dataset.userSeek = "";
     try {
-      el.currentTime = srcTime;
+      el.currentTime = target;
     } catch {
       /* ignore */
     }
@@ -339,7 +350,11 @@ export function noteUserSeek() {
 }
 
 export function markVideoSeekDone() {
-  if (!useEditor.getState().playing) return;
+  if (!useEditor.getState().playing) {
+    // A frame step that came in while the last seek was running was skipped; catch up now.
+    syncPreviewToPlayhead();
+    return;
+  }
   if (videoEl?.paused) playMedia(videoEl, false);
   if (overlayEl?.paused) playMedia(overlayEl, false);
 }
@@ -355,6 +370,8 @@ export function togglePlayback() {
     st.setPlaying(false);
     lastWall = 0;
     pauseAll();
+    // Settle the paused picture on the playhead's frame, which is where a cut would go.
+    syncPreviewToPlayhead();
     return;
   }
   lastWall = 0;

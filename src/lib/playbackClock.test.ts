@@ -11,7 +11,7 @@ import { tryAddOverlayFromMedia } from "../core/edits";
 import { fromMedia } from "../core/project";
 import type { MediaInfo } from "../core/types";
 import { useEditor } from "../store/editorStore";
-import { setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead, timelineFromVideoTime } from "./playbackClock";
+import { markVideoSeekDone, noteUserSeek, setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead, timelineFromVideoTime } from "./playbackClock";
 
 /** Just enough of a <video> for the preview clock. Reloading drops the frame back to 0 like a real element. */
 function fakeVideo() {
@@ -110,5 +110,46 @@ describe("playhead from the preview picture", () => {
     el.currentTime = 4;
     el.fire("timeupdate");
     expect(useEditor.getState().playhead).toBeCloseTo(24);
+  });
+});
+
+describe("paused preview picture", () => {
+  const fps60: MediaInfo = { ...base, frameRate: 60 };
+
+  it("follows every single-frame step at 60 fps, not every third one", () => {
+    useEditor.setState({
+      project: fromMedia(fps60),
+      playhead: 3.7,
+      playing: false,
+      scrubPreview: null,
+      previewUrl: "asset://base",
+      previewByPath: { [base.path]: "asset://base" },
+    });
+    const el = fakeVideo();
+    setPreviewVideo(el as unknown as HTMLVideoElement);
+    syncPreviewToPlayhead();
+    for (let k = 1; k <= 4; k++) {
+      useEditor.setState({ playhead: 3.7 - k / 60 });
+      noteUserSeek();
+      syncPreviewToPlayhead();
+      // Just inside the frame that starts at the playhead, so that frame is the one shown.
+      expect(el.currentTime - (3.7 - k / 60)).toBeGreaterThan(0);
+      expect(el.currentTime - (3.7 - k / 60)).toBeLessThan(1 / 120);
+    }
+  });
+
+  it("catches up on a step that arrived while the last seek was running", () => {
+    useEditor.setState({ project: fromMedia(fps60), playhead: 2, playing: false, scrubPreview: null, previewUrl: "asset://base", previewByPath: { [base.path]: "asset://base" } });
+    const el = fakeVideo();
+    setPreviewVideo(el as unknown as HTMLVideoElement);
+    syncPreviewToPlayhead();
+    el.seeking = true;
+    useEditor.setState({ playhead: 2 + 1 / 60 });
+    noteUserSeek();
+    syncPreviewToPlayhead();
+    expect(el.currentTime).toBeLessThan(2 + 1 / 120);
+    el.seeking = false;
+    markVideoSeekDone();
+    expect(el.currentTime).toBeGreaterThan(2 + 1 / 60);
   });
 });
