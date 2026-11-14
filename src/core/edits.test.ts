@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { poseAt, writeTransform } from "./canvas";
 import { fromMedia, flattenCanvas, flattenKind, mapTimelineToSource, snapStart, timelineDuration } from "./project";
-import { collectLaneSpans, extractSpans, tryAddOverlayFromMedia, tryAddText, tryDelete, tryLiftRange, tryLinkPair, tryMove, tryMoveIds, trySlice, tryToggleLink, tryTrim } from "./edits";
-import type { MediaInfo } from "./types";
+import { collapseBlank, collectLaneSpans, extractSpans, tryAddOverlayFromMedia, tryAddText, tryDelete, tryLiftRange, tryLinkPair, tryMove, tryMoveIds, trySlice, tryToggleLink, tryTrim } from "./edits";
+import { clipEnd, type MediaInfo } from "./types";
 
 const info: MediaInfo = {
   path: "C:/x.mp4",
@@ -232,9 +232,26 @@ describe("timeline model", () => {
     expect(auds).toHaveLength(2);
   });
 
+  it("can cut a single 60 fps frame off the end of a clip", () => {
+    const p = fromMedia(info);
+    const v = p.clips.find((c) => c.kind === "video")!;
+    const at = clipEnd(v) - 1 / 60;
+    const r = trySlice(p, at);
+    expect(r.ok).toBe(true);
+  });
+
+  it("collapses a one-frame hole", () => {
+    const p = fromMedia(info);
+    const v = p.clips.find((c) => c.kind === "video")!;
+    const moved = collapseBlank([{ ...v, timelineStart: 1 / 60 }]);
+    expect(moved[0].timelineStart).toBeCloseTo(0, 9);
+  });
+
   it("lift range refuses empty or tiny selections", () => {
     const p = fromMedia(info);
-    expect(tryLiftRange(p, "video", 4, 4.01).ok).toBe(false);
+    expect(tryLiftRange(p, "video", 4, 4.005).ok).toBe(false);
+    // One 60 fps frame is a real selection: a stray frame has to be removable.
+    expect(tryLiftRange(p, "video", 4, 4 + 1 / 60).ok).toBe(true);
     expect(tryLiftRange(p, "video", 20, 22).ok).toBe(false);
   });
 

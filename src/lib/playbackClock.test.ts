@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./previewSound", () => ({
   soundPrime: async () => {},
@@ -115,11 +115,10 @@ describe("playhead from the preview picture", () => {
 
 describe("paused preview picture", () => {
   const fps60: MediaInfo = { ...base, frameRate: 60 };
-
-  it("follows every single-frame step at 60 fps, not every third one", () => {
+  const open = (playhead: number) => {
     useEditor.setState({
       project: fromMedia(fps60),
-      playhead: 3.7,
+      playhead,
       playing: false,
       scrubPreview: null,
       previewUrl: "asset://base",
@@ -127,29 +126,85 @@ describe("paused preview picture", () => {
     });
     const el = fakeVideo();
     setPreviewVideo(el as unknown as HTMLVideoElement);
+    return el;
+  };
+  const step = (t: number) => {
+    useEditor.setState({ playhead: t });
+    noteUserSeek();
+    syncPreviewToPlayhead();
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    vi.advanceTimersByTime(1000);
+  });
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("lands on every single-frame step at 60 fps, not every third one", () => {
+    const el = open(3.7);
     syncPreviewToPlayhead();
     for (let k = 1; k <= 4; k++) {
-      useEditor.setState({ playhead: 3.7 - k / 60 });
-      noteUserSeek();
-      syncPreviewToPlayhead();
+      vi.advanceTimersByTime(200);
+      step(3.7 - k / 60);
       // Just inside the frame that starts at the playhead, so that frame is the one shown.
       expect(el.currentTime - (3.7 - k / 60)).toBeGreaterThan(0);
       expect(el.currentTime - (3.7 - k / 60)).toBeLessThan(1 / 120);
     }
   });
 
+  it("coalesces fast steps and lands on the last one once they stop", () => {
+    const el = open(2);
+    syncPreviewToPlayhead();
+    let seeks = 0;
+    let t = el.currentTime;
+    Object.defineProperty(el, "currentTime", {
+      get: () => t,
+      set: (v: number) => {
+        seeks++;
+        t = v;
+      },
+    });
+    for (let k = 1; k <= 5; k++) {
+      vi.advanceTimersByTime(30);
+      step(2 + k / 60);
+    }
+    expect(seeks).toBeLessThanOrEqual(1);
+    vi.advanceTimersByTime(200);
+    expect(t - (2 + 5 / 60)).toBeGreaterThan(0);
+    expect(t - (2 + 5 / 60)).toBeLessThan(1 / 120);
+  });
+
+  it("does not keep re-seeking when the element reports a slightly different time", () => {
+    const el = open(2);
+    let seeks = 0;
+    Object.defineProperty(el, "currentTime", {
+      get: () => 1.99,
+      // Loading a src resets the time to 0; only count real seeks.
+      set: (v: number) => {
+        if (v > 0) seeks++;
+      },
+    });
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(200);
+      markVideoSeekDone();
+      syncPreviewToPlayhead();
+    }
+    expect(seeks).toBe(1);
+  });
+
   it("catches up on a step that arrived while the last seek was running", () => {
-    useEditor.setState({ project: fromMedia(fps60), playhead: 2, playing: false, scrubPreview: null, previewUrl: "asset://base", previewByPath: { [base.path]: "asset://base" } });
-    const el = fakeVideo();
-    setPreviewVideo(el as unknown as HTMLVideoElement);
+    const el = open(2);
     syncPreviewToPlayhead();
     el.seeking = true;
-    useEditor.setState({ playhead: 2 + 1 / 60 });
-    noteUserSeek();
-    syncPreviewToPlayhead();
+    vi.advanceTimersByTime(200);
+    step(2 + 1 / 60);
     expect(el.currentTime).toBeLessThan(2 + 1 / 120);
     el.seeking = false;
     markVideoSeekDone();
+    vi.advanceTimersByTime(200);
     expect(el.currentTime).toBeGreaterThan(2 + 1 / 60);
   });
 });

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: the timeline got laggy in 0.2.15 when scrubbing, trimming or stepping while paused, because every tiny move made the preview decode its exact frame. While the playhead moves, the preview now follows like before, and it lands on the exact frame as soon as the playhead stops.
+- Fixed: a cut, selection or clip had to be at least 0.05s long, which is 3 frames at 60 fps, so a stray 1 or 2 frame sliver could not be cut off or deleted, and a one-frame hole was not closed. Single frames can now be sliced off, selected, deleted and collapsed, and export no longer pads a one-frame piece into its neighbour's frame.
+
 ## 0.2.15
 
 - Fixed: when paused, the preview could show a frame 2 to 3 frames away from the playhead on 60 fps video. Stepping one frame with the arrow keys often left the picture where it was, so a cut placed by eye at a shot change ended up a couple of frames early, and the export then showed a short flash of the part you cut out. The paused preview now always shows the exact frame at the playhead, including right after you pause playback and when you step quickly.

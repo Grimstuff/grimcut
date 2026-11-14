@@ -264,6 +264,7 @@ function playMedia(v: HTMLMediaElement, fromUser: boolean) {
 function assignSrc(el: HTMLMediaElement, path: string, url: string) {
   if (el.dataset.mediaPath === path && el.getAttribute("src")) return;
   el.dataset.mediaPath = path;
+  delete el.dataset.pausedTarget;
   el.src = url;
   // A fresh load sits on frame 0; its first seek must not be throttled by the previous one.
   el.dataset.lastSeek = "0";
@@ -274,6 +275,31 @@ const PAUSED_DRIFT = 0.003;
 /** A paused seek lands 1 ms inside the frame that starts at the playhead, so float rounding
  *  of a frame-start time cannot make the decoder show the previous frame. */
 const FRAME_NUDGE = 0.001;
+/** How long the paused playhead has to stay put before the picture is seeked to its exact frame. */
+const SETTLE_MS = 120;
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function seekTo(el: HTMLMediaElement, target: number, paused: boolean) {
+  const now = performance.now();
+  el.dataset.lastSeek = String(now);
+  el.dataset.lastSeekAt = String(now);
+  el.dataset.userSeek = "";
+  if (paused) el.dataset.pausedTarget = String(target);
+  else delete el.dataset.pausedTarget;
+  try {
+    el.currentTime = target;
+  } catch {
+    /* ignore */
+  }
+}
+
+function settleLater(wait: number) {
+  if (settleTimer) return;
+  settleTimer = setTimeout(() => {
+    settleTimer = null;
+    syncPreviewToPlayhead();
+  }, Math.max(10, wait));
+}
 
 function seekIfNeeded(el: HTMLMediaElement, srcTime: number, playing: boolean) {
   if (el.dataset.playLock === "1" || el.dataset.recovering === "1") return;
@@ -284,24 +310,38 @@ function seekIfNeeded(el: HTMLMediaElement, srcTime: number, playing: boolean) {
   if (el.seeking) return;
   const user = el.dataset.userSeek === "1";
   const precise = useEditor.getState().scrubPreview != null;
-  if (playing && !el.paused && el.readyState >= 2 && !user && !precise) return;
-  // Paused, the picture has to sit on the playhead's own frame: it is what the user cuts by.
-  // A 0.04s dead zone is 2.4 frames at 60 fps, so frame steps did not move the picture and
-  // cuts placed by eye landed 2-3 frames off what the export (and FFmpeg) actually cut.
-  let target = playing ? srcTime : srcTime + FRAME_NUDGE;
+  const last = Number(el.dataset.lastSeek || 0);
+  if (playing) {
+    delete el.dataset.pausedTarget;
+    if (!el.paused && el.readyState >= 2 && !user && !precise) return;
+    const drift = Number.isFinite(el.currentTime) ? Math.abs(el.currentTime - srcTime) : 99;
+    const need = user ? 0.04 : 0.05;
+    if (drift > need && performance.now() - last > 80) seekTo(el, srcTime, false);
+    return;
+  }
+  // Paused, the picture has to end up on the playhead's own frame: it is what the user cuts by
+  // (a 0.04s dead zone is 2.4 frames at 60 fps, which put cuts placed by eye 2-3 frames off).
+  // But every exact seek decodes from the previous keyframe, hundreds of frames on a long-GOP
+  // source, so while the playhead is moving (drag, trim, key repeat) the picture only follows
+  // within a few frames as before, and lands on the exact frame once the playhead settles.
+  let target = srcTime + FRAME_NUDGE;
   if (Number.isFinite(el.duration) && el.duration > 0) target = Math.min(target, el.duration);
   const drift = Number.isFinite(el.currentTime) ? Math.abs(el.currentTime - target) : 99;
-  const need = !playing ? PAUSED_DRIFT : precise || user ? 0.04 : 0.05;
-  const last = Number(el.dataset.lastSeek || 0);
-  if (drift > need && performance.now() - last > (precise ? 20 : 80)) {
-    el.dataset.lastSeek = String(performance.now());
-    el.dataset.userSeek = "";
-    try {
-      el.currentTime = target;
-    } catch {
-      /* ignore */
-    }
+  if (drift <= PAUSED_DRIFT) return;
+  // Already seeked to this exact spot. The element can report a slightly different time
+  // afterwards; seeking it again would loop forever.
+  const asked = Number(el.dataset.pausedTarget);
+  if (Number.isFinite(asked) && Math.abs(asked - target) < 1e-4) return;
+  const since = performance.now() - Number(el.dataset.lastSeekAt || 0);
+  if (since >= SETTLE_MS) {
+    seekTo(el, target, true);
+    return;
   }
+  if (drift > 0.04 && performance.now() - last > (precise ? 20 : 80)) {
+    seekTo(el, target, true);
+    return;
+  }
+  settleLater(SETTLE_MS - since);
 }
 
 function syncPicture(el: HTMLVideoElement | null, p: VideoProject, clip: Clip | null, ph: number, playing: boolean) {

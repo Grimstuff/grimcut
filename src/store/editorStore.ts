@@ -3,7 +3,7 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { AnimChannels, AnimKey, Clip, ClipEffect, ClipEffectKind, KeyParams, ClipKind, ClipboardChunk, ClipSpan, MediaInfo, SubCue, SubStyle, TimeRange, VideoProject } from "../core/types";
 import { DEFAULT_SUB_STYLE, audioTrackLabel, audioTracks, textSubtitleTracks } from "../core/types";
-import { addGainRegion, clipBlur, clipDuration, clipEnd, clipKey, DEFAULT_KEY, formatTime, newId } from "../core/types";
+import { addGainRegion, clipBlur, clipDuration, clipEnd, clipKey, DEFAULT_KEY, formatTime, MIN_CLIP, newId } from "../core/types";
 import {
   clipAt,
   flattenCanvas,
@@ -912,7 +912,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (keyId) {
       const host = get().project?.clips.find((c) => c.anim?.some((k) => k.id === keyId));
       const range = get().range;
-      const rangeOn = !!range && Math.abs(range.end - range.start) > 0.04;
+      const rangeOn = !!range && Math.abs(range.end - range.start) >= MIN_CLIP;
       if (host && !get().clipSel.length && !rangeOn) {
         get().removeAnimKey(host.id, keyId);
         return;
@@ -944,7 +944,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       return;
     }
     const span = get().range;
-    if (span && Math.abs(span.end - span.start) > 0.04) {
+    if (span && Math.abs(span.end - span.start) >= MIN_CLIP) {
       get().liftRange();
       return;
     }
@@ -1248,13 +1248,13 @@ export const useEditor = create<EditorState>((set, get) => ({
             }
           : null;
       get().del();
-      if (chunk && chunk.sourceEnd - chunk.sourceStart > 0.04) {
+      if (chunk && chunk.sourceEnd - chunk.sourceStart >= MIN_CLIP) {
         set({ clipboard: chunk, status: `Cut ${formatTime(chunk.sourceEnd - chunk.sourceStart)} — paste to place` });
       }
       return;
     }
     const range = get().range;
-    if (range && Math.abs(range.end - range.start) > 0.04) {
+    if (range && Math.abs(range.end - range.start) >= MIN_CLIP) {
       get().liftRange();
       return;
     }
