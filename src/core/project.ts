@@ -15,6 +15,7 @@ import {
   cloneClip,
   newId,
   SNAP,
+  TOUCH_EPS,
 } from "./types";
 
 export function fromMedia(info: MediaInfo): VideoProject {
@@ -325,7 +326,7 @@ export function flattenCanvas(
   for (let i = 0; i < sorted.length - 1; i++) {
     const a = sorted[i];
     const b = sorted[i + 1];
-    if (b - a < 0.01) continue;
+    if (b - a < TOUCH_EPS) continue;
     const moving = [...clipsOn(p, "video"), ...clipsOn(p, "text")].some((c) => {
       const keys = [...(c.anim ?? [])].sort((x, y) => x.t - y.t);
       if (keys.length < 2 || !(c.timelineStart < b && clipEnd(c) > a)) return false;

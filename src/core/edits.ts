@@ -7,6 +7,7 @@ import {
   type MediaInfo,
   type VideoProject,
   MIN_CLIP,
+  TOUCH_EPS,
   clipDuration,
   clipEnd,
   cloneClip,
@@ -85,15 +86,15 @@ export function collapseBlank(clips: Clip[]): Clip[] {
   const merged: { t0: number; t1: number }[] = [];
   for (const s of segs) {
     const last = merged[merged.length - 1];
-    if (!last || s.t0 > last.t1 + 0.02) merged.push({ ...s });
+    if (!last || s.t0 > last.t1 + TOUCH_EPS) merged.push({ ...s });
     else last.t1 = Math.max(last.t1, s.t1);
   }
   if (!merged.length) return clips;
   const holes: { start: number; dur: number }[] = [];
-  if (merged[0].t0 > 0.02) holes.push({ start: 0, dur: merged[0].t0 });
+  if (merged[0].t0 > TOUCH_EPS) holes.push({ start: 0, dur: merged[0].t0 });
   for (let i = 0; i < merged.length - 1; i++) {
     const gap = merged[i + 1].t0 - merged[i].t1;
-    if (gap > 0.02) holes.push({ start: merged[i].t1, dur: gap });
+    if (gap > TOUCH_EPS) holes.push({ start: merged[i].t1, dur: gap });
   }
   if (!holes.length) return clips;
   return clips.map((c) => {
@@ -358,7 +359,7 @@ export function mergeSpans(spans: ClipSpan[]): ClipSpan[] {
     let cur = list[0];
     for (let i = 1; i < list.length; i++) {
       const n = list[i];
-      if (n.start <= cur.end + 0.02) cur = { ...cur, end: Math.max(cur.end, n.end) };
+      if (n.start <= cur.end + TOUCH_EPS) cur = { ...cur, end: Math.max(cur.end, n.end) };
       else {
         out.push(cur);
         cur = n;

@@ -2456,8 +2456,8 @@ fn extract_copy(
         return Err("Stream copy cannot include timeline gaps.".into());
     }
     let start = clip.source_start.max(0.0);
-    let end = clip.source_end.max(start + 0.02);
-    let dur = (end - start).max(0.02);
+    let end = clip.source_end.max(start + MIN_SPAN);
+    let dur = (end - start).max(MIN_SPAN);
     let start_s = format!("{start:.6}");
     let dur_s = format!("{dur:.6}");
     // Input -ss so copy begins at a keyframe. -ss after -i with -c copy often
@@ -2567,13 +2567,13 @@ fn append_audio_concat(
     for (i, clip) in clips.iter().enumerate() {
         let lab = format!("{out}{i}");
         if clip.gap {
-            let d = clip.duration.max(0.02);
+            let d = clip.duration.max(MIN_SPAN);
             fc.push_str(&format!(
                 "anullsrc=r=48000:cl=stereo:d={d:.6},aformat=sample_fmts=fltp:channel_layouts=stereo[{lab}];"
             ));
         } else {
             let start = clip.source_start.max(0.0);
-            let end = clip.source_end.max(start + 0.02);
+            let end = clip.source_end.max(start + MIN_SPAN);
             let idx = clip_input_index(inputs, plan, clip);
             let src = clip.source_path.as_deref().unwrap_or(&plan.source_path);
             let (idx, shift) = seek_input(inputs, seeked, idx, src, start);
@@ -2682,6 +2682,10 @@ fn seek_video_input(
 }
 
 const SEEK_MIN_SEC: f64 = 2.0;
+
+/// Shortest span an export segment is padded to. Below one frame even at 120 fps, so a
+/// one-frame clip is not stretched into its neighbour's frame (0.02s was 2 frames at 60 fps).
+const MIN_SPAN: f64 = 0.005;
 
 fn clip_input_index(inputs: &[String], plan: &ExportPlan, clip: &ClipDto) -> usize {
     let src = clip.source_path.as_deref().unwrap_or(&plan.source_path);
@@ -2843,7 +2847,7 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
     let mut fc = String::new();
     let mut vpads = String::new();
     for (i, slice) in slices.iter().enumerate() {
-        let d = slice.duration.max(0.02);
+        let d = slice.duration.max(MIN_SPAN);
         if slice.layers.is_empty() {
             fc.push_str(&format!(
                 "color=c=black:s={w}x{h}:r={fps}:d={d:.6},format=rgba,setsar=1[v{i}];"
@@ -2859,7 +2863,7 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
                 .position(|p| p == &layer.source_path)
                 .unwrap_or(0);
             let start = layer.source_start.max(0.0);
-            let end = layer.source_end.max(start + 0.02);
+            let end = layer.source_end.max(start + MIN_SPAN);
             let sx = layer.scale_x.unwrap_or(layer.scale);
             let sy = layer.scale_y.unwrap_or(layer.scale);
             let (dw, dh) = contain_wh(layer.src_width, layer.src_height, w, h, sx, sy);
@@ -2960,13 +2964,13 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     let mut vpads = String::new();
     for (i, clip) in plan.clips.iter().enumerate() {
         if clip.gap {
-            let d = clip.duration.max(0.02);
+            let d = clip.duration.max(MIN_SPAN);
             fc.push_str(&format!(
                 "color=c=black:s={w}x{h}:r={fps}:d={d:.6},format=yuv420p,setsar=1[v{i}];"
             ));
         } else {
             let start = clip.source_start.max(0.0);
-            let end = clip.source_end.max(start + 0.02);
+            let end = clip.source_end.max(start + MIN_SPAN);
             let idx = clip_input_index(&inputs, plan, clip);
             let src = clip.source_path.as_deref().unwrap_or(&plan.source_path);
             let sub = burn_prefix(src, &burn, plan);

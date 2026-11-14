@@ -223,7 +223,11 @@ export type PlaybackFollow = {
   gapEnd?: number;
 };
 
-export const MIN_CLIP = 0.05;
+/** Shortest clip or edit span: under one frame at 120 fps, so a single 60 fps frame can be cut
+ *  out or kept. 0.05s was 3 frames at 60 fps, which made a 1-2 frame sliver impossible to remove. */
+export const MIN_CLIP = 0.008;
+/** Holes and overlaps smaller than this count as touching (float slop, not a real gap). */
+export const TOUCH_EPS = 0.004;
 export const SNAP = 0.08;
 
 export function clipGainAtSource(c: Clip, src: number): number {
