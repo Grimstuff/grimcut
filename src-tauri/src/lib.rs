@@ -1265,7 +1265,17 @@ fn video_encode_args(enc: &EncoderOpt, plan: &ExportPlan, fps: f64) -> Vec<Strin
     } else if let Some(crf) = plan.crf {
         strip_av_flag(&mut args, &["-cq", "-crf", "-global_quality"]);
         if enc.id.contains("nvenc") {
-            args.extend(["-cq".into(), crf.to_string()]);
+            // -b:v 0 lifts NVENC's default 2M target so -cq alone sets quality.
+            strip_av_flag(&mut args, &["-rc", "-b:v"]);
+            args.extend(["-rc".into(), "vbr".into(), "-cq".into(), crf.to_string(), "-b:v".into(), "0".into()]);
+        } else if enc.id.contains("amf") {
+            // AMF ignores -crf; constant-QP is its quality knob. AV1 QP runs 0-255.
+            strip_av_flag(&mut args, &["-rc", "-qp_i", "-qp_p", "-qp_b"]);
+            let qp = if enc.id.starts_with("av1") { (crf * 4).clamp(0, 255) } else { crf.clamp(0, 51) };
+            args.extend(["-rc".into(), "cqp".into(), "-qp_i".into(), qp.to_string(), "-qp_p".into(), qp.to_string()]);
+            if enc.id.starts_with("h264") {
+                args.extend(["-qp_b".into(), qp.to_string()]);
+            }
         } else if enc.id.contains("qsv") {
             args.extend(["-global_quality".into(), crf.to_string()]);
         } else {
@@ -3287,6 +3297,46 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn crf_args(enc: &EncoderOpt, crf: i32) -> Vec<String> {
+        let plan: ExportPlan = serde_json::from_value(serde_json::json!({
+            "sourcePath": "a.mp4", "outputPath": "b.mp4", "clips": [],
+            "hasAudio": false, "videoCodec": null, "useStreamCopy": false, "crf": crf,
+        }))
+        .unwrap();
+        video_encode_args(enc, &plan, 30.0)
+    }
+
+    fn val<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
+        args.windows(2).find(|w| w[0] == key).map(|w| w[1].as_str())
+    }
+
+    #[test]
+    fn crf_reaches_every_encoder() {
+        let all: Vec<EncoderOpt> =
+            encoder_catalog().into_iter().chain(hevc_catalog()).chain(av1_catalog()).collect();
+        for enc in &all {
+            let a = crf_args(enc, 30);
+            let key = if enc.id.contains("nvenc") {
+                "-cq"
+            } else if enc.id.contains("amf") {
+                "-qp_i"
+            } else if enc.id.contains("qsv") {
+                "-global_quality"
+            } else {
+                "-crf"
+            };
+            let want = if enc.id == "av1_amf" { "120" } else { "30" };
+            assert_eq!(val(&a, key), Some(want), "{} {:?}", enc.id, a);
+            if enc.id.contains("amf") {
+                assert_eq!(val(&a, "-rc"), Some("cqp"));
+                assert!(!a.iter().any(|s| s == "-crf"));
+            }
+            if enc.id.contains("nvenc") {
+                assert_eq!(val(&a, "-b:v"), Some("0"));
+            }
+        }
+    }
 
     #[test]
     fn libvpx_forced_only_for_alpha_webm() {
