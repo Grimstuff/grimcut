@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.19
+
+- Fixed: the export Quality (CRF) slider did nothing on AMD (AMF) encoders, so H.264/HEVC/AV1 exports came out the same size at every setting. It now controls quality on AMD, and NVIDIA exports no longer get capped at a low bitrate.
+
 ## 0.2.18
 
 - Fixed: when playback reached the end of a pasted clip (or a moved piece) whose next clip doesn't pick up where it left off, the playhead jumped to the spot the piece was copied from and played on from there. Playback now moves on to the next clip on the timeline, picture and sound.
