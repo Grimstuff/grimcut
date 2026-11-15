@@ -591,55 +591,116 @@ export function tryLiftRange(
   return { ok: true, clips: next };
 }
 
+/** Paste copied pieces with the earliest one at `at`. Linked pairs stay linked; a piece that
+ *  lands on an occupied main track goes to the overlay, like a drop. `kind` pastes one lane only
+ *  ("audio" on a video-only copy uses that video's sound). */
 export function tryPaste(
   p: VideoProject,
   chunk: ClipboardChunk,
   at: number,
-  preferLayer: ClipLayer = "base",
-): EditResult {
-  const dur = chunk.sourceEnd - chunk.sourceStart;
-  if (dur < MIN_CLIP) return { ok: false, error: "Clipboard is empty." };
-  let layer: ClipLayer = preferLayer;
-  const overlapBase = p.clips.some(
-    (c) =>
-      c.kind === chunk.kind &&
-      c.layer === "base" &&
-      at < clipEnd(c) &&
-      at + dur > c.timelineStart,
-  );
-  if (overlapBase && preferLayer === "base") layer = "over";
-
+  kind?: ClipKind,
+): { ok: true; clips: Clip[]; placed: string[] } | { ok: false; error: string } {
+  let pieces = chunk.clips.map(cloneClip);
+  if (kind) {
+    const same = pieces.filter((c) => c.kind === kind);
+    if (same.length) pieces = same;
+    else if (kind === "audio") {
+      pieces = pieces
+        .filter((c) => c.kind === "video")
+        .map((c) => ({
+          id: c.id,
+          kind: "audio" as const,
+          layer: c.layer,
+          timelineStart: c.timelineStart,
+          sourceStart: c.sourceStart,
+          sourceEnd: c.sourceEnd,
+          linkGroup: null,
+          sourcePath: c.sourcePath,
+        }));
+    } else pieces = [];
+    // A partner left behind means the piece pastes unlinked.
+    for (const c of pieces) {
+      if (c.linkGroup && !pieces.some((m) => m.id !== c.id && m.linkGroup === c.linkGroup)) c.linkGroup = null;
+    }
+  }
+  pieces = pieces.filter((c) => clipDuration(c) >= MIN_CLIP);
+  if (!pieces.length) return { ok: false, error: "Clipboard is empty." };
+  const origin = Math.min(...pieces.map((c) => c.timelineStart));
+  const start = Math.max(0, at);
+  const groups = new Map<string, string>();
+  const placed = new Set<string>();
   const clips = p.clips.map(cloneClip);
-  const placed = newId();
-  clips.push({
-    id: placed,
-    kind: chunk.kind,
-    layer,
-    timelineStart: Math.max(0, at),
-    sourceStart: chunk.sourceStart,
-    sourceEnd: chunk.sourceEnd,
-    linkGroup: null,
-    sourcePath: chunk.sourcePath,
-    transform: defaultTransform(),
-  });
-  return resolveOccupancy({ ...p, clips }, new Set([placed]));
+  for (const c of pieces) {
+    let g: string | null = null;
+    if (c.linkGroup) {
+      g = groups.get(c.linkGroup) ?? newId();
+      groups.set(c.linkGroup, g);
+    }
+    const id = newId();
+    placed.add(id);
+    clips.push({ ...c, id, timelineStart: start + (c.timelineStart - origin), linkGroup: g });
+  }
+  const r = resolveOccupancy({ ...p, clips }, placed);
+  return r.ok ? { ...r, placed: [...placed] } : r;
 }
 
+/** Copy the selected spans as standalone pieces. Selections already include a linked partner
+ *  (see collectLaneSpans), and the copied pair stays linked. */
+export function chunkFromSpans(p: VideoProject, spans: ClipSpan[]): ClipboardChunk | null {
+  const merged = mergeSpans(spans).sort((x, y) => x.start - y.start);
+  const pieces: Clip[] = [];
+  const groups = new Map<string, string>();
+  const nth = new Map<string, number>();
+  for (const s of merged) {
+    const c = p.clips.find((x) => x.id === s.clipId);
+    if (!c) continue;
+    const t0 = c.timelineStart;
+    const a = Math.max(s.start, t0);
+    const b = Math.min(s.end, clipEnd(c));
+    if (b - a < MIN_CLIP) continue;
+    let g: string | null = null;
+    if (c.linkGroup) {
+      // The i-th span of a video pairs with the i-th span of its linked audio.
+      const i = nth.get(c.id) ?? 0;
+      nth.set(c.id, i + 1);
+      const key = `${c.linkGroup}:${i}`;
+      g = groups.get(key) ?? newId();
+      groups.set(key, g);
+    }
+    const whole = a <= t0 + MIN_CLIP && b >= clipEnd(c) - MIN_CLIP;
+    pieces.push({
+      ...cloneClip(c),
+      id: newId(),
+      timelineStart: a,
+      sourceStart: c.sourceStart + (a - t0),
+      sourceEnd: c.sourceStart + (b - t0),
+      linkGroup: g,
+      anim: whole ? c.anim?.map((k) => ({ ...k })) : animRetimed(c, a - t0, b - t0),
+    });
+  }
+  // A link whose partner wasn't selected is dropped.
+  for (const c of pieces) {
+    if (c.linkGroup && !pieces.some((m) => m.id !== c.id && m.linkGroup === c.linkGroup)) c.linkGroup = null;
+  }
+  if (!pieces.length) return null;
+  const origin = Math.min(...pieces.map((c) => c.timelineStart));
+  let end = origin;
+  for (const c of pieces) {
+    end = Math.max(end, clipEnd(c));
+    c.timelineStart -= origin;
+  }
+  return { clips: pieces, duration: end - origin };
+}
+
+/** Copy [start, end) on a lane, with linked partners. */
 export function chunkFromRange(
   p: VideoProject,
   kind: ClipKind,
   start: number,
   end: number,
 ): ClipboardChunk | null {
-  const a = Math.min(start, end);
-  const b = Math.max(start, end);
-  if (b - a < MIN_CLIP) return null;
-  const c = clipAt(p, (a + b) / 2, kind) ?? clipAt(p, a, kind);
-  if (!c) return null;
-  const srcA = c.sourceStart + (Math.max(a, c.timelineStart) - c.timelineStart);
-  const srcB = c.sourceStart + (Math.min(b, clipEnd(c)) - c.timelineStart);
-  if (srcB - srcA < MIN_CLIP) return null;
-  return { kind, sourceStart: srcA, sourceEnd: srcB, sourcePath: c.sourcePath };
+  if (Math.abs(end - start) < MIN_CLIP) return null;
+  return chunkFromSpans(p, collectLaneSpans(p, kind, start, end));
 }
 
 /** Place a media file on overlay (2nd layer) at `at`. Keeps existing overlay clips. */

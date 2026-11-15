@@ -20,6 +20,9 @@ import { AR_PRESETS, RES_BY_AR, evenPx, hugTextClip, maskAnimWrite, motionTarget
 import {
   UndoStack,
   chunkFromRange,
+  chunkFromSpans,
+  collectLaneSpans,
+  wholeClipSpans,
   tryDelete,
   mergeSpans,
   tryAddAudioFromMedia,
@@ -372,6 +375,29 @@ function animFromPose(id: string, t: number, xf: ClipTransform): AnimKey {
     scaleY: xf.scaleY ?? xf.scale,
     rotation: xf.rotation,
   };
+}
+
+/** What Copy takes: the timeline selection, else a dragged range, else the selected clip.
+ *  Linked partners come along (collectLaneSpans / wholeClipSpans add them). */
+function clipboardSpans(st: EditorState): ClipSpan[] {
+  const p = st.project;
+  if (!p) return [];
+  if (st.clipSel.length) return st.clipSel;
+  const r = st.range;
+  if (r && Math.abs(r.end - r.start) >= MIN_CLIP) return collectLaneSpans(p, r.kind, r.start, r.end);
+  return st.selectedId ? wholeClipSpans(p, st.selectedId) : [];
+}
+
+function chunkLabel(chunk: ClipboardChunk): string {
+  const kinds = new Set(chunk.clips.map((c) => c.kind));
+  const what = kinds.has("audio") && (kinds.has("video") || kinds.has("text"))
+    ? "video + audio"
+    : kinds.has("audio")
+      ? "audio"
+      : kinds.has("text") && !kinds.has("video")
+        ? "text"
+        : "video";
+  return `${what} ${formatTime(chunk.duration)}`;
 }
 
 function applyClips(get: () => EditorState, set: (s: Partial<EditorState>) => void, clips: Clip[], label: string) {
@@ -1204,30 +1230,14 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   copyRange: () => {
     const p = get().project;
-    const range = get().range;
-    if (!p || !range) {
-      const id = get().selectedId;
-      const c = p?.clips.find((x) => x.id === id);
-      if (c) {
-        set({
-          clipboard: {
-            kind: c.kind,
-            sourceStart: c.sourceStart,
-            sourceEnd: c.sourceEnd,
-            sourcePath: c.sourcePath,
-            consume: false,
-          },
-          status: "Copied clip",
-        });
-      }
-      return;
-    }
-    const chunk = chunkFromRange(p, range.kind, range.start, range.end);
+    if (!p) return;
+    const spans = clipboardSpans(get());
+    const chunk = spans.length ? chunkFromSpans(p, spans) : null;
     if (!chunk) {
-      set({ status: "Nothing to copy in that range." });
+      set({ status: "Select something on the timeline to copy." });
       return;
     }
-    set({ clipboard: { ...chunk, consume: false }, status: `Copied ${chunk.kind} ${formatTime(chunk.sourceEnd - chunk.sourceStart)}` });
+    set({ clipboard: { ...chunk, consume: false }, status: `Copied ${chunkLabel(chunk)} — Ctrl+V pastes at the playhead` });
   },
 
   cutOrSlice: () => {
@@ -1235,21 +1245,11 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (!p) return;
     const sel = get().clipSel;
     if (sel.length) {
-      const c = p.clips.find((x) => x.id === sel[0].clipId);
-      const s = sel[0];
-      const chunk =
-        c && s
-          ? {
-              kind: c.kind,
-              sourceStart: c.sourceStart + (Math.max(s.start, c.timelineStart) - c.timelineStart),
-              sourceEnd: c.sourceStart + (Math.min(s.end, clipEnd(c)) - c.timelineStart),
-              sourcePath: c.sourcePath,
-              consume: true,
-            }
-          : null;
+      const chunk = chunkFromSpans(p, sel);
       get().del();
-      if (chunk && chunk.sourceEnd - chunk.sourceStart >= MIN_CLIP) {
-        set({ clipboard: chunk, status: `Cut ${formatTime(chunk.sourceEnd - chunk.sourceStart)} — paste to place` });
+      // del() refuses some cuts (e.g. the last video); only keep the chunk if it went through.
+      if (chunk && get().project !== p) {
+        set({ clipboard: { ...chunk, consume: true }, status: `Cut ${chunkLabel(chunk)} — paste to place` });
       }
       return;
     }
@@ -1277,7 +1277,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     applyClips(get, set, r.clips, "Cut range");
     const dur = range.end - range.start;
     set({
-      clipboard: chunk ? { ...chunk, consume: true } : null,
+      clipboard: chunk ? { ...chunk, consume: true } : get().clipboard,
       range: null,
       status: chunk
         ? `Cut ${formatTime(dur)} — click paste once to place it`
@@ -1292,18 +1292,23 @@ export const useEditor = create<EditorState>((set, get) => ({
       set({ status: "Clipboard empty." });
       return;
     }
-    const chunk = kind ? { ...clip, kind } : clip;
-    const r = tryPaste(p, chunk, get().playhead);
+    const r = tryPaste(p, clip, get().playhead, kind);
     if (!r.ok) {
       set({ status: r.error });
       return;
     }
     applyClips(get, set, r.clips, "Paste");
-    const added = r.clips.find((c) => !p.clips.some((old) => old.id === c.id));
+    const live = get().project?.clips ?? r.clips;
+    const added = live.filter((c) => r.placed.includes(c.id));
+    const first = added.find((c) => c.kind !== "audio") ?? added[0];
     set({
-      clipboard: null,
-      selectedId: added?.id ?? get().selectedId,
-      status: added?.layer === "over" ? "Pasted on overlay (2nd layer)" : "Pasted",
+      // Copy stays on the clipboard so it can be pasted again; a Cut pastes once.
+      clipboard: clip.consume ? null : clip,
+      clipSel: added.map((c) => ({ clipId: c.id, start: c.timelineStart, end: clipEnd(c) })),
+      selLane: first ? (first.kind === "audio" ? "audio" : "video") : null,
+      range: null,
+      selectedId: first?.id ?? get().selectedId,
+      status: added.some((c) => c.layer === "over") ? "Pasted on overlay (2nd layer)" : "Pasted",
     });
   },
 

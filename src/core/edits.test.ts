@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { poseAt, writeTransform } from "./canvas";
 import { fromMedia, flattenCanvas, flattenKind, mapTimelineToSource, snapStart, timelineDuration } from "./project";
-import { collapseBlank, collectLaneSpans, extractSpans, tryAddOverlayFromMedia, tryAddText, tryDelete, tryLiftRange, tryLinkPair, tryMove, tryMoveIds, trySlice, tryToggleLink, tryTrim } from "./edits";
+import { chunkFromSpans, collapseBlank, collectLaneSpans, extractSpans, tryPaste, tryAddOverlayFromMedia, tryAddText, tryDelete, tryLiftRange, tryLinkPair, tryMove, tryMoveIds, trySlice, tryToggleLink, tryTrim } from "./edits";
 import { clipEnd, type MediaInfo } from "./types";
 
 const info: MediaInfo = {
@@ -361,5 +361,58 @@ describe("timeline model", () => {
     const flat = flattenKind(p, "video");
     expect(flat[0]).toEqual({ gap: true, duration: 2 });
     expect(flat.some((r) => !r.gap)).toBe(true);
+  });
+
+  it("copies a selection with its linked audio and pastes them linked", () => {
+    const p = fromMedia(info);
+    const spans = collectLaneSpans(p, "video", 2, 4);
+    const chunk = chunkFromSpans(p, spans);
+    expect(chunk?.clips.map((c) => c.kind).sort()).toEqual(["audio", "video"]);
+    expect(chunk?.duration).toBeCloseTo(2);
+    const r = tryPaste(p, chunk!, 10);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const added = r.clips.filter((c) => r.placed.includes(c.id));
+    expect(added).toHaveLength(2);
+    expect(added[0].linkGroup).toBeTruthy();
+    expect(added[0].linkGroup).toBe(added[1].linkGroup);
+    expect(added[0].linkGroup).not.toBe(p.clips[0].linkGroup);
+    for (const c of added) {
+      expect(c.timelineStart).toBeCloseTo(10);
+      expect(c.sourceStart).toBeCloseTo(2);
+      expect(c.sourceEnd).toBeCloseTo(4);
+      expect(c.layer).toBe("base");
+    }
+  });
+
+  it("copies only the video when it is unlinked", () => {
+    const p = fromMedia(info);
+    const un = tryToggleLink(p, p.clips[0].id);
+    if (!un.ok) throw new Error(un.error);
+    const q = { ...p, clips: un.clips };
+    const chunk = chunkFromSpans(q, collectLaneSpans(q, "video", 1, 3));
+    expect(chunk?.clips.map((c) => c.kind)).toEqual(["video"]);
+  });
+
+  it("paste over existing footage goes to the overlay as a linked pair", () => {
+    const p = fromMedia(info);
+    const chunk = chunkFromSpans(p, collectLaneSpans(p, "video", 6, 8))!;
+    const r = tryPaste(p, chunk, 1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const added = r.clips.filter((c) => r.placed.includes(c.id));
+    expect(added.every((c) => c.layer === "over")).toBe(true);
+    expect(added[0].linkGroup).toBe(added[1].linkGroup);
+  });
+
+  it("audio-only paste of a linked copy drops the link", () => {
+    const p = fromMedia(info);
+    const chunk = chunkFromSpans(p, collectLaneSpans(p, "video", 2, 4))!;
+    const r = tryPaste(p, chunk, 10, "audio");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const added = r.clips.filter((c) => r.placed.includes(c.id));
+    expect(added.map((c) => c.kind)).toEqual(["audio"]);
+    expect(added[0].linkGroup).toBeNull();
   });
 });
