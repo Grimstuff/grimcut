@@ -1,6 +1,6 @@
 [package]
 name = "grimcut"
-version = "0.2.16"
+version = "0.2.17"
 description = "Simple Fluent-style video editor"
 authors = ["Grimmers"]
 edition = "2021"

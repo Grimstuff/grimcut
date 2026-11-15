@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.17
 
 - Copy and paste a timeline selection: drag a selection, press Ctrl+C (or the new Copy button), move the playhead and press Ctrl+V. If the video's audio is linked, the audio comes along and the pasted pair stays linked. A copy now stays on the clipboard, so you can paste it as many times as you like (Cut still pastes once). Before, Copy ignored a dragged selection and copied the whole clip instead, without its audio, and only one paste worked. Pasting onto existing footage puts it on the overlay (layer 2), same as a drop. Ctrl+Shift+V pastes only the audio.
 - The pasted piece is selected afterwards, so Delete or Undo takes it right back off.
