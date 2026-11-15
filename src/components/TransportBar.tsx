@@ -310,6 +310,19 @@ function IconPaste() {
     </svg>
   );
 }
+function IconCopy() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+        d="M5.8 5.8h7v7.4h-7zM3.2 10.2V2.8h7"
+      />
+    </svg>
+  );
+}
 function IconFx() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -854,6 +867,7 @@ export function TransportBar() {
   const range = useEditor((s) => s.range);
   const busy = useEditor((s) => s.busy);
   const clipboard = useEditor((s) => s.clipboard);
+  const hasClipSel = useEditor((s) => s.clipSel.length > 0);
   const volume = useEditor((s) => s.previewVolume);
   const media = useEditor((s) => s.media);
   const burnSubs = useEditor((s) => s.burnSubs);
@@ -929,7 +943,8 @@ export function TransportBar() {
   const resList = RES_BY_AR[ar] ?? RES_BY_AR["16:9"];
   const rangeDur = range ? Math.abs(range.end - range.start) : 0;
   const selected = project.clips.find((c) => c.id === selectedId);
-  const canCut = rangeDur > 0.04;
+  const canCut = rangeDur > 0.04 || hasClipSel;
+  const canCopy = canCut || !!selected;
   const onClip = project.clips.some(
     (c) => playhead > c.timelineStart && playhead < c.timelineStart + (c.sourceEnd - c.sourceStart),
   );
@@ -1354,26 +1369,34 @@ export function TransportBar() {
           </button>
         </div>
         <div className="tb-group">
+          <button
+            type="button"
+            className="icon-btn"
+            title={canCut ? "Cut selection (Ctrl+X)" : "Slice at playhead (Ctrl+X / S)"}
+            disabled={!canCut && !onClip}
+            onClick={() => useEditor.getState().cutOrSlice()}
+          >
+            <IconCut />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="Copy selection, with linked audio (Ctrl+C)"
+            disabled={!canCopy}
+            onClick={() => useEditor.getState().copyRange()}
+          >
+            <IconCopy />
+          </button>
           {clipboard ? (
             <button
               type="button"
               className="icon-btn"
-              title="Paste at playhead (Ctrl+V)"
+              title="Paste at playhead (Ctrl+V, Ctrl+Shift+V for audio only)"
               onClick={() => useEditor.getState().paste()}
             >
               <IconPaste />
             </button>
-          ) : (
-            <button
-              type="button"
-              className="icon-btn"
-              title={canCut ? "Cut selected range (Ctrl+X)" : "Slice at playhead (Ctrl+X / S)"}
-              disabled={!canCut && !onClip}
-              onClick={() => useEditor.getState().cutOrSlice()}
-            >
-              <IconCut />
-            </button>
-          )}
+          ) : null}
           <button
             type="button"
             className="icon-btn"

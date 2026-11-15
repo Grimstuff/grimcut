@@ -204,11 +204,12 @@ export type TimeRange = { start: number; end: number };
 /** Timeline selection on a clip (seconds). */
 export type ClipSpan = { clipId: string; start: number; end: number };
 
+/** Copied timeline pieces. Each clip's timelineStart is relative to the earliest piece (0).
+ *  Linked video+audio keep a shared linkGroup so they paste as a linked pair. */
 export type ClipboardChunk = {
-  kind: ClipKind;
-  sourceStart: number;
-  sourceEnd: number;
-  sourcePath?: string;
+  clips: Clip[];
+  /** Span from the earliest piece's start to the latest piece's end. */
+  duration: number;
   /** True for Cut: paste once, then clear. Copy stays until replaced. */
   consume?: boolean;
 };
