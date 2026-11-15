@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: when playback reached the end of a pasted clip (or a moved piece) whose next clip doesn't pick up where it left off, the playhead jumped to the spot the piece was copied from and played on from there. Playback now moves on to the next clip on the timeline, picture and sound.
+
 ## 0.2.17
 
 - Copy and paste a timeline selection: drag a selection, press Ctrl+C (or the new Copy button), move the playhead and press Ctrl+V. If the video's audio is linked, the audio comes along and the pasted pair stays linked. A copy now stays on the clipboard, so you can paste it as many times as you like (Cut still pastes once). Before, Copy ignored a dragged selection and copied the whole clip instead, without its audio, and only one paste worked. Pasting onto existing footage puts it on the overlay (layer 2), same as a drop. Ctrl+Shift+V pastes only the audio.

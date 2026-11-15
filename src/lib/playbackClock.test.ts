@@ -11,7 +11,7 @@ import { tryAddOverlayFromMedia } from "../core/edits";
 import { fromMedia } from "../core/project";
 import type { MediaInfo } from "../core/types";
 import { useEditor } from "../store/editorStore";
-import { markVideoSeekDone, noteUserSeek, setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead, timelineFromVideoTime } from "./playbackClock";
+import { markVideoSeekDone, noteUserSeek, setOverlayVideo, setPreviewVideo, syncPreviewToPlayhead, timelineOnClip } from "./playbackClock";
 
 /** Just enough of a <video> for the preview clock. Reloading drops the frame back to 0 like a real element. */
 function fakeVideo() {
@@ -90,17 +90,18 @@ describe("playhead from the preview picture", () => {
     return { ...p, clips: [a, { ...a, id: "again", timelineStart: 20 }] };
   };
 
-  it("picks the copy nearest the playhead, not the first one", () => {
+  it("reads the picture against the clip under the playhead, not the first one", () => {
     const p = twice();
-    expect(timelineFromVideoTime(p, 4, 23)).toBeCloseTo(24);
-    expect(timelineFromVideoTime(p, 4, 3)).toBeCloseTo(4);
+    expect(timelineOnClip(p, 4, 23.9)).toBeCloseTo(24);
+    expect(timelineOnClip(p, 4, 3.9)).toBeCloseTo(4);
   });
 
-  it("ignores clips of another file", () => {
+  it("ignores a picture of another file", () => {
     const p = twice();
     p.clips[1] = { ...p.clips[1], sourcePath: "C:/other.mp4" };
-    expect(timelineFromVideoTime(p, 4, 23, base.path)).toBeCloseTo(4);
-    expect(timelineFromVideoTime(p, 4, 3, "C:/other.mp4")).toBeCloseTo(24);
+    expect(timelineOnClip(p, 4, 3.9, base.path)).toBeCloseTo(4);
+    expect(timelineOnClip(p, 4, 23.9, base.path)).toBeNull();
+    expect(timelineOnClip(p, 4, 23.9, "C:/other.mp4")).toBeCloseTo(24);
   });
 
   it("leaves the playhead alone when a paused seek reports its time", () => {
@@ -206,5 +207,55 @@ describe("paused preview picture", () => {
     markVideoSeekDone();
     vi.advanceTimersByTime(200);
     expect(el.currentTime).toBeGreaterThan(2 + 1 / 60);
+  });
+});
+
+describe("playing past a pasted clip", () => {
+  // Source 5-7 pasted at the start, then the rest of the video (source 0-10) after it.
+  const pasted = () => {
+    const p = fromMedia(base);
+    const a = p.clips[0];
+    return {
+      ...p,
+      clips: [
+        { ...a, id: "paste", timelineStart: 0, sourceStart: 5, sourceEnd: 7, linkGroup: null },
+        { ...a, id: "rest", timelineStart: 2, sourceStart: 0, sourceEnd: 10, linkGroup: null },
+      ],
+    };
+  };
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    vi.advanceTimersByTime(1000);
+  });
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("moves on to the next clip instead of jumping to where the paste came from", () => {
+    useEditor.setState({ project: pasted(), playhead: 1.98, playing: true, scrubPreview: null, previewUrl: "asset://base", previewByPath: { [base.path]: "asset://base" } });
+    const el = fakeVideo();
+    setPreviewVideo(el as unknown as HTMLVideoElement);
+    el.dataset.mediaPath = base.path;
+    el.paused = false;
+    el.currentTime = 7.03;
+    el.fire("timeupdate");
+    // Source 7.03 is also at 9.03 in the next clip; the playhead must not go there.
+    expect(useEditor.getState().playhead).toBeCloseTo(2);
+
+    // The next clip starts at source 0, so the playing picture is seeked there.
+    syncPreviewToPlayhead();
+    expect(el.currentTime).toBeCloseTo(0);
+  });
+
+  it("ignores the old picture while the seek to the next clip is running", () => {
+    useEditor.setState({ project: pasted(), playhead: 2, playing: true, scrubPreview: null, previewUrl: "asset://base", previewByPath: { [base.path]: "asset://base" } });
+    const el = fakeVideo();
+    setPreviewVideo(el as unknown as HTMLVideoElement);
+    el.dataset.mediaPath = base.path;
+    el.paused = false;
+    el.currentTime = 7.05;
+    el.fire("timeupdate");
+    expect(useEditor.getState().playhead).toBeCloseTo(2);
   });
 });

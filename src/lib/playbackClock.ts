@@ -4,7 +4,7 @@
  */
 import { clipAt, clipSourcePath, timelineDuration } from "../core/project";
 import type { Clip, VideoProject } from "../core/types";
-import { clipGainAtSource } from "../core/types";
+import { clipEnd, clipGainAtSource } from "../core/types";
 import { useEditor } from "../store/editorStore";
 import { soundPrime, soundSet, soundStop, soundUnload } from "./previewSound";
 import { hookMediaLog, playLog } from "./playLog";
@@ -37,31 +37,32 @@ function keepEl(prev: HTMLVideoElement | null, next: HTMLVideoElement | null) {
   return null;
 }
 
+/** How far past a clip's source end the playing picture may run and still count as that clip.
+ *  Covers a late frame tick; the playhead is then held at the clip's end. */
+const RUN_ON = 0.5;
+
 /**
- * Timeline time the main <video> is showing. Several base clips can cover the same
- * source second (a reused or reordered piece, or another file at the same time), so
- * only clips of the file the element has loaded count, and the one nearest the
- * current playhead wins. Taking the first match made the playhead jump to another clip.
+ * Timeline time of the playing main picture, read only against the clip under the playhead.
+ * The element plays its file straight on, so at the end of a clip it runs into source the next
+ * clip may not use (a pasted or moved piece). Looking that time up anywhere on the timeline
+ * jumped the playhead to wherever that source sits, e.g. back to where a paste came from.
+ * Held at the clip's end instead, the playhead moves on to the next clip and the picture is
+ * seeked there. Null when the picture isn't showing this clip yet (loading or seeking).
  */
-export function timelineFromVideoTime(p: VideoProject, srcT: number, near: number, path?: string) {
-  let best: number | null = null;
-  let bestD = Infinity;
-  for (const c of p.clips) {
-    if (c.kind !== "video" || c.layer === "over") continue;
-    if (path && clipSourcePath(p, c) !== path) continue;
-    if (srcT < c.sourceStart - 0.05 || srcT > c.sourceEnd + 0.05) continue;
-    const tl = c.timelineStart + (srcT - c.sourceStart);
-    const d = Math.abs(tl - near);
-    if (d < bestD) {
-      bestD = d;
-      best = tl;
-    }
-  }
-  return best;
+export function timelineOnClip(p: VideoProject, srcT: number, playhead: number, path?: string): number | null {
+  const cur = clipAt(p, playhead, "video", "base");
+  if (!cur) return null;
+  if (path && clipSourcePath(p, cur) !== path) return null;
+  if (srcT < cur.sourceStart - 0.05 || srcT > cur.sourceEnd + RUN_ON) return null;
+  const tl = Math.min(clipEnd(cur), cur.timelineStart + Math.max(0, srcT - cur.sourceStart));
+  // Playback only moves the playhead a little at a time. Anything further is the picture still
+  // showing the last clip's source (its seek to this clip hasn't landed yet).
+  if (tl < playhead - 0.25 || tl > playhead + 0.75) return null;
+  return tl;
 }
 
 function videoTimeline(p: VideoProject, v: HTMLVideoElement, srcT: number) {
-  return timelineFromVideoTime(p, srcT, useEditor.getState().playhead, v.dataset.mediaPath || undefined);
+  return timelineOnClip(p, srcT, useEditor.getState().playhead, v.dataset.mediaPath || undefined);
 }
 
 function pullPlayheadFromVideo() {
@@ -205,8 +206,15 @@ function urlFor(p: VideoProject, clip: Clip) {
   return st.previewByPath[path] ?? (path === p.sourcePath ? st.previewUrl : null);
 }
 
+/** Audio clip each sound channel played last, to spot a move onto another clip, and whether
+ *  the sound still has to be put on that clip's spot. */
+const soundClip: Record<"base" | "over", string | null> = { base: null, over: null };
+const soundPending: Record<"base" | "over", boolean> = { base: false, over: false };
+
 function driveSound(p: VideoProject, ph: number, playing: boolean, vol: number) {
   const drive = (which: "base" | "over", clip: Clip | null) => {
+    if (clip && soundClip[which] !== clip.id) soundPending[which] = true;
+    soundClip[which] = clip?.id ?? null;
     if (!clip) {
       soundSet(which, null, null, 0, false, 0);
       return;
@@ -214,7 +222,9 @@ function driveSound(p: VideoProject, ph: number, playing: boolean, vol: number) 
     const url = urlFor(p, clip);
     const path = clipSourcePath(p, clip);
     const t = Math.max(0, clip.sourceStart + (ph - clip.timelineStart));
-    soundSet(which, url ? path : null, url, t, playing, vol * dbLin(clipGainDb(clip, ph)));
+    if (soundSet(which, url ? path : null, url, t, playing, vol * dbLin(clipGainDb(clip, ph)), soundPending[which])) {
+      soundPending[which] = false;
+    }
   };
   drive("base", clipAt(p, ph, "audio", "base"));
   drive("over", clipAt(p, ph, "audio", "over"));
@@ -270,6 +280,8 @@ function assignSrc(el: HTMLMediaElement, path: string, url: string) {
   el.dataset.lastSeek = "0";
 }
 
+/** Mismatch at which a playing picture is seeked: a clip change, not playback jitter. */
+const PLAY_JUMP = 0.25;
 /** Largest picture/playhead mismatch a paused preview tolerates: well under a frame at 240 fps. */
 const PAUSED_DRIFT = 0.003;
 /** A paused seek lands 1 ms inside the frame that starts at the playhead, so float rounding
@@ -313,8 +325,10 @@ function seekIfNeeded(el: HTMLMediaElement, srcTime: number, playing: boolean) {
   const last = Number(el.dataset.lastSeek || 0);
   if (playing) {
     delete el.dataset.pausedTarget;
-    if (!el.paused && el.readyState >= 2 && !user && !precise) return;
     const drift = Number.isFinite(el.currentTime) ? Math.abs(el.currentTime - srcTime) : 99;
+    // Playing on its own is left alone, unless the picture is clearly on the wrong spot: a new
+    // clip whose source doesn't follow on from the last one (a pasted or moved piece).
+    if (!el.paused && el.readyState >= 2 && !user && !precise && drift < PLAY_JUMP) return;
     const need = user ? 0.04 : 0.05;
     if (drift > need && performance.now() - last > 80) seekTo(el, srcTime, false);
     return;

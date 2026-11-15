@@ -110,12 +110,14 @@ export function soundSet(
   time: number,
   playing: boolean,
   gainLin: number,
-): void {
+  /** True after a move onto another clip: its source may not follow on from the last one. */
+  newClip = false,
+): boolean {
   const c = chan(which);
   if (!path || !url) {
     c.el.pause();
     if (c.gain) c.gain.gain.value = 0;
-    return;
+    return true;
   }
   if (c.path !== path || !c.el.getAttribute("src")) {
     if (c.hooked) rebuild(c);
@@ -139,9 +141,11 @@ export function soundSet(
   c.el.volume = 1;
   const drift = Number.isFinite(c.el.currentTime) ? Math.abs(c.el.currentTime - time) : 99;
   const live = playing && !c.el.paused && !c.el.seeking;
-  if (drift > (live ? 2.5 : 0.08) && !c.el.seeking) {
+  let placed = drift <= 0.25;
+  if (drift > (live ? (newClip ? 0.25 : 2.5) : 0.08) && !c.el.seeking) {
     try {
       c.el.currentTime = Math.max(0, time);
+      placed = true;
     } catch {
       /* ignore */
     }
@@ -151,4 +155,5 @@ export function soundSet(
   } else if (!c.el.paused) {
     c.el.pause();
   }
+  return placed;
 }
