@@ -1327,6 +1327,7 @@ fn run_filtered_encode(
     filter_arg: &str,
     work: &Path,
     fps: f64,
+    size: (i32, i32),
 ) -> Result<String, String> {
     let attempts = pick_encoders(ffmpeg, plan);
     if attempts.is_empty() {
@@ -1375,11 +1376,27 @@ fn run_filtered_encode(
             args.push("-i".into());
             args.push((*inp).clone());
         }
+        let mut graph = filter_arg.to_string();
+        let mut vmap = "[vout]";
+        if enc.id == "av1_amf" {
+            let (aw, ah) = amf_av1_size(size.0, size.1);
+            if (aw, ah) != size {
+                // AMD's AV1 encoder pads frames to 64x16 blocks and writes the
+                // padded size into the file (1440x1080 came out 1472x1082 with
+                // black bars, and X turned it green). Hand it an aligned size.
+                let amf = work.join("filter_av1_amf.txt");
+                let base = fs::read_to_string(filter_arg).map_err(|e| e.to_string())?;
+                let fc = format!("{base}[vout]scale={aw}:{ah}:flags=lanczos,setsar=1[vamf];");
+                fs::write(&amf, fc).map_err(|e| e.to_string())?;
+                graph = amf.to_string_lossy().into_owned();
+                vmap = "[vamf]";
+            }
+        }
         args.extend([
             "-/filter_complex".into(),
-            filter_arg.into(),
+            graph,
             "-map".into(),
-            "[vout]".into(),
+            vmap.into(),
         ]);
         if plan.has_audio {
             args.extend([
@@ -2530,6 +2547,33 @@ pub(crate) fn trim_ffmpeg_err(stderr: &str) -> String {
     }
 }
 
+/// AMD's AV1 hardware encodes in 64x16 blocks and, instead of cropping the
+/// padding away, ships it as picture (bars on the right/bottom, odd sizes like
+/// 1082 that upload sites mangle). Pick the 64x16-aligned size nearest in shape
+/// to `w`x`h`; the stretch stays under 1% at 720p and up.
+fn amf_av1_size(w: i32, h: i32) -> (i32, i32) {
+    if w % 64 == 0 && h % 16 == 0 {
+        return (w, h);
+    }
+    let aspect = w as f64 / h.max(1) as f64;
+    let mut best = (w, h);
+    let mut best_score = f64::MAX;
+    let base = (w as f64 / 64.0).round() as i32;
+    for k in (base - 1).max(1)..=base + 1 {
+        let aw = k * 64;
+        let ah = ((aw as f64 / aspect / 16.0).round() as i32).max(1) * 16;
+        let shape = ((aw as f64 / ah as f64) / aspect - 1.0).abs();
+        // Growing a little beats throwing pixels away.
+        let grow = (aw * ah) as f64 / (w * h).max(1) as f64 - 1.0;
+        let score = shape * 10.0 + if grow < 0.0 { -grow * 2.0 } else { grow };
+        if score < best_score {
+            best_score = score;
+            best = (aw, ah);
+        }
+    }
+    best
+}
+
 fn even_dim(n: i32, fallback: i32) -> i32 {
     let v = if n > 1 { n } else { fallback };
     v - (v % 2)
@@ -2939,7 +2983,7 @@ fn export_composite(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
     let filter_arg = filter_path.to_string_lossy().into_owned();
-    run_filtered_encode(app, ffmpeg, plan, &inputs, &seeked, &filter_arg, &work, fps)
+    run_filtered_encode(app, ffmpeg, plan, &inputs, &seeked, &filter_arg, &work, fps, (w, h))
 }
 
 fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<String, String> {
@@ -3005,7 +3049,7 @@ fn export_reencode(app: &AppHandle, ffmpeg: &Path, plan: &ExportPlan) -> Result<
     let filter_path = work.join("filter.txt");
     fs::write(&filter_path, &fc).map_err(|e| e.to_string())?;
     let filter_arg = filter_path.to_string_lossy().into_owned();
-    run_filtered_encode(app, ffmpeg, plan, &inputs, &seeked, &filter_arg, &work, fps)
+    run_filtered_encode(app, ffmpeg, plan, &inputs, &seeked, &filter_arg, &work, fps, (w, h))
 }
 
 #[cfg(test)]
@@ -3309,6 +3353,18 @@ mod tests {
 
     fn val<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
         args.windows(2).find(|w| w[0] == key).map(|w| w[1].as_str())
+    }
+
+    #[test]
+    fn amf_av1_size_is_block_aligned() {
+        assert_eq!(amf_av1_size(1920, 1088), (1920, 1088));
+        assert_eq!(amf_av1_size(1440, 1080), (1472, 1104));
+        for (w, h) in [(1920, 1080), (1280, 720), (1080, 1920), (1470, 1082), (642, 360), (1000, 1000)] {
+            let (aw, ah) = amf_av1_size(w, h);
+            assert!(aw % 64 == 0 && ah % 16 == 0, "{w}x{h} -> {aw}x{ah}");
+            let drift = ((aw as f64 / ah as f64) / (w as f64 / h as f64) - 1.0).abs();
+            assert!(drift < 0.025, "{w}x{h} -> {aw}x{ah} drift {drift}");
+        }
     }
 
     #[test]
